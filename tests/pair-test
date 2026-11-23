@@ -30,9 +30,14 @@ esac
 EOF
 printf '#!/usr/bin/env bash\nexit 0\n' >"$work/bin/systemctl"
 # curl: the peer answers /fingerprint with its own; anything else succeeds.
+# FAKE_CHOSEN_MEANWHILE stands for another machine being chosen while that
+# answer is on its way.
 cat >"$work/bin/curl" <<'EOF'
 #!/usr/bin/env bash
-[[ "$*" == */fingerprint ]] && printf '%s' "$FAKE_PEER_FINGERPRINT"
+if [[ "$*" == */fingerprint ]]; then
+  [[ -n ${FAKE_CHOSEN_MEANWHILE:-} ]] && printf '%s\n' "$FAKE_CHOSEN_MEANWHILE" >"$OMATAIL_KVM_CONFIG_DIR/peers"
+  printf '%s' "$FAKE_PEER_FINGERPRINT"
+fi
 exit 0
 EOF
 chmod +x "$work"/bin/*
@@ -81,6 +86,26 @@ check "and the chosen machine stays trusted" grep -qF "\"$peer_fp\" = \"newpeer\
 before=$(sha256sum <"$config")
 run pair >/dev/null
 check "pairing again changes nothing" test "$(sha256sum <"$config")" = "$before"
+
+# A pairing that began for one machine must not finish once another is chosen.
+write_config
+printf '100.64.0.2 newpeer\n' >"$work/config/peers"
+FAKE_CHOSEN_MEANWHILE='100.64.0.3 thirdpeer' run pair >/dev/null
+check "a pairing overtaken by a new choice authorizes nothing" bash -c '! grep -qF "$1" "$2"' _ "$peer_fp" "$config"
+
+# While a choice is being applied, a pairing waits instead of slipping in.
+write_config
+printf '100.64.0.2 newpeer\n' >"$work/config/peers"
+(
+  flock 7
+  sleep 1
+  printf '100.64.0.3 thirdpeer\n' >"$work/config/peers"
+) 7>"$work/run/trust.lock" &
+holder=$!
+sleep 0.3
+run pair >/dev/null
+wait "$holder"
+check "a pairing that waited for a new choice authorizes nothing" bash -c '! grep -qF "$1" "$2"' _ "$peer_fp" "$config"
 
 printf '\n%d passed, %d failed\n' "$passed" "$failed"
 ((failed == 0))

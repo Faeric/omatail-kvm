@@ -97,6 +97,20 @@ write_lan_mouse_config() {
   }
 }
 
+# Choosing a peer and trusting one are never interleaved: both happen under
+# this lock, so a pairing that started for one machine cannot finish after
+# another has been chosen.
+lock_trust() {
+  ensure_runtime_dir || die "runtime directory $OMATAIL_KVM_RUNTIME_DIR is not usable"
+  exec 7>"$OMATAIL_KVM_RUNTIME_DIR/trust.lock" || die 'could not open the trust lock'
+  flock -w 60 7 || die 'another configuration or pairing is still running'
+}
+
+unlock_trust() {
+  flock -u 7 2>/dev/null
+  exec 7>&-
+}
+
 configure() {
   local address="${1:-}" position="${2:-}" name answer previous keep=drop
 
@@ -115,6 +129,7 @@ configure() {
   # Only the machine chosen now may send input here. Choosing a different one
   # withdraws the trust given to the one before it; the same one keeps its
   # pairing.
+  lock_trust
   previous=$(peer_addresses | head -n 1)
   [[ $previous == "$address" ]] && keep=keep
 
@@ -125,6 +140,7 @@ configure() {
   # The choice is kept either way; the privileged step picks it up and comes
   # back here once lan-mouse is in place.
   if ! command -v lan-mouse >/dev/null 2>&1; then
+    unlock_trust
     printf 'Saved. lan-mouse is not installed yet; run: omatail-kvm setup\n'
     return 4
   fi
@@ -135,6 +151,8 @@ configure() {
 
   "$here/clip-service" install >/dev/null || die 'could not install the clipboard relay'
   "$here/kvm-service" install || die 'could not install the keyboard and mouse service'
+
+  unlock_trust
 
   printf '%s is on the %s.\n' "$name" "$position"
   pair || true
@@ -153,7 +171,7 @@ wait_for_daemon() {
 # Returns 0 when the peer is trusted here, 3 when it would not say who it is,
 # which is the ordinary case while it has not chosen this machine yet.
 pair() {
-  local fingerprint stale=() old changed=0
+  local fingerprint stale=() old changed=0 current
 
   load_peer || die 'no peer is configured; run: omatail-kvm configure <address> <position>'
 
@@ -162,6 +180,18 @@ pair() {
     return 3
   }
   valid_fingerprint "$fingerprint" || die "$peer_name answered with something that is not a fingerprint"
+
+  # The answer took a network round trip, and another machine may have been
+  # chosen meanwhile. From here on the choice cannot change, and the
+  # fingerprint is trusted only if it came from the machine that is still the
+  # chosen one.
+  lock_trust
+  read -r current _ < <(first_peer) || current=
+  if [[ $current != "$peer_address" ]]; then
+    unlock_trust
+    printf '%s is no longer the chosen machine; it was not paired.\n' "$peer_name"
+    return 3
+  fi
 
   # The peer's certificate is the only one trusted: any other fingerprint,
   # left by a machine chosen earlier or by a certificate the peer has since
@@ -185,6 +215,7 @@ pair() {
     fi
     timeout 5s lan-mouse cli save-config >/dev/null 2>&1
   fi
+  unlock_trust
 
   # Told only when something changed here, so two machines greeting each other
   # stop after one round.
