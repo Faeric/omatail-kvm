@@ -5,9 +5,9 @@
 #
 # Three units, all in the user manager, so nothing here needs root:
 #
-#   omakvm-clip.socket          listens for clips from the peers
-#   omakvm-clip@.service        handles one incoming clip (clip-receive)
-#   omakvm-clip-watch.service   watches this clipboard and sends (clip-watch)
+#   omatail-kvm-clip.socket          listens for clips from the peers
+#   omatail-kvm-clip@.service        handles one incoming clip (clip-receive)
+#   omatail-kvm-clip-watch.service   watches this clipboard and sends (clip-watch)
 #
 # The units point at the scripts next to this one, so `install` is run again
 # whenever the scripts move.
@@ -18,9 +18,9 @@ here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 source "$here/lib.sh"
 
 unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-socket_unit=omakvm-clip.socket
-receive_unit=omakvm-clip@.service
-watch_unit=omakvm-clip-watch.service
+socket_unit=omatail-kvm-clip.socket
+receive_unit=omatail-kvm-clip@.service
+watch_unit=omatail-kvm-clip-watch.service
 
 install_units() {
   mkdir -p -- "$unit_dir" || return 1
@@ -29,10 +29,10 @@ install_units() {
   # peers file uses. The firewall decides which interface may reach it.
   cat >"$unit_dir/$socket_unit" <<EOF
 [Unit]
-Description=Omakvm clipboard relay: incoming clips
+Description=Omatail KVM clipboard relay: incoming clips
 
 [Socket]
-ListenStream=0.0.0.0:$OMAKVM_CLIP_PORT
+ListenStream=0.0.0.0:$OMATAIL_KVM_CLIP_PORT
 Accept=yes
 MaxConnections=16
 NoDelay=true
@@ -45,7 +45,7 @@ EOF
   # ends when the next copy replaces it.
   cat >"$unit_dir/$receive_unit" <<EOF
 [Unit]
-Description=Omakvm clipboard relay: one incoming clip
+Description=Omatail KVM clipboard relay: one incoming clip
 CollectMode=inactive-or-failed
 
 [Service]
@@ -57,7 +57,7 @@ EOF
 
   cat >"$unit_dir/$watch_unit" <<EOF
 [Unit]
-Description=Omakvm clipboard relay: outgoing clips
+Description=Omatail KVM clipboard relay: outgoing clips
 PartOf=graphical-session.target
 After=graphical-session.target
 
@@ -79,7 +79,7 @@ EOF
 uninstall_units() {
   systemctl --user disable --now --quiet "$socket_unit" "$watch_unit" 2>/dev/null
   # Instances still holding a received clip would keep the old script alive.
-  systemctl --user stop 'omakvm-clip@*.service' 2>/dev/null
+  systemctl --user stop 'omatail-kvm-clip@*.service' 2>/dev/null
   rm -f -- "$unit_dir/$socket_unit" "$unit_dir/$receive_unit" "$unit_dir/$watch_unit"
   systemctl --user daemon-reload
 }
@@ -92,7 +92,7 @@ show_status() {
 
   while read -r peer; do
     if curl --silent --fail --noproxy '*' --connect-timeout 2 --max-time 4 \
-      --output /dev/null "http://$peer:$OMAKVM_CLIP_PORT/ping" 2>/dev/null; then
+      --output /dev/null "http://$peer:$OMATAIL_KVM_CLIP_PORT/ping" 2>/dev/null; then
       printf 'peer      %s reachable\n' "$peer"
     else
       printf 'peer      %s not answering\n' "$peer"

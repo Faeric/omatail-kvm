@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Put this machine back to how it was before Omakvm, to rehearse a first
+# Put this machine back to how it was before Omatail KVM, to rehearse a first
 # install. Run it in a terminal: it asks for your password.
 #
 # Usage: fresh-start
@@ -11,26 +11,26 @@
 
 set -uo pipefail
 
-PLUGIN_ID="io.github.faeric.omakvm"
+PLUGIN_ID="io.github.faeric.omatail-kvm"
 PLUGIN_DIR="$HOME/.config/omarchy/plugins/$PLUGIN_ID"
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omakvm"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omatail-kvm"
 LAN_MOUSE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/lan-mouse"
-BACKUP_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omakvm-fresh-start/$(date +%Y%m%d-%H%M%S)"
+BACKUP_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omatail-kvm-fresh-start/$(date +%Y%m%d-%H%M%S)"
 
 step() { printf '\n==> %s\n' "$*"; }
 
 mapfile -t peers < <(awk '$1 ~ /^100\.[0-9]+\.[0-9]+\.[0-9]+$/ { print $1 }' "$CONFIG_DIR/peers" 2>/dev/null)
 
-printf 'Omakvm fresh start\n==================\n\n'
-printf 'This removes the Omakvm plugin, its services, its firewall rules and the\n'
+printf 'Omatail KVM fresh start\n=======================\n\n'
+printf 'This removes the Omatail KVM plugin, its services, its firewall rules and the\n'
 printf 'lan-mouse package from this machine (%s).\n' "$(uname -n)"
 printf 'Configuration is moved to %s\n\n' "$BACKUP_DIR"
 read -r -p 'Continue? [y/N] ' answer
 [[ $answer == [yYoO]* ]] || { printf 'Nothing was changed.\n'; exit 0; }
 
-step 'Stopping sharing and removing the services (omakvm remove)'
-if [[ -x $PLUGIN_DIR/scripts/omakvm ]]; then
-  "$PLUGIN_DIR/scripts/omakvm" remove
+step 'Stopping sharing and removing the services (omatail-kvm remove)'
+if [[ -x $PLUGIN_DIR/scripts/omatail-kvm ]]; then
+  "$PLUGIN_DIR/scripts/omatail-kvm" remove
 else
   printf 'The plugin is not installed; skipping.\n'
 fi
@@ -68,12 +68,12 @@ done
 
 step 'What is left'
 left=0
-systemctl --user list-unit-files 'omakvm-*' --no-legend 2>/dev/null | grep . && left=1
+systemctl --user list-unit-files 'omatail-kvm-*' --no-legend 2>/dev/null | grep . && left=1
 pgrep -a -u "$UID" -x lan-mouse && left=1
 pgrep -a -u "$UID" -f 'wl-paste .*--watch.*clip-send' && left=1
 pacman -Q lan-mouse 2>/dev/null && left=1
 [[ -e $PLUGIN_DIR ]] && printf '%s\n' "$PLUGIN_DIR" && left=1
-sudo -n ufw status 2>/dev/null | grep -i omakvm && left=1
+sudo -n ufw status 2>/dev/null | grep -i 'omatail kvm' && left=1
 
 if ((left == 0)); then
   printf 'Nothing. This machine is ready for a first install.\n'

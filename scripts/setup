@@ -16,7 +16,7 @@ set -uo pipefail
 
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib.sh"
 
-RESULT_FILE="$OMAKVM_RUNTIME_DIR/setup-result"
+RESULT_FILE="$OMATAIL_KVM_RUNTIME_DIR/setup-result"
 
 finish() {
   ensure_runtime_dir && write_state "$RESULT_FILE" "$1"
@@ -41,11 +41,11 @@ if [[ $device != tailscale* ]]; then
   finish 2
 fi
 
-printf 'Omakvm setup\n============\n\n'
+printf 'Omatail KVM setup\n=================\n\n'
 printf 'This will run, as root:\n\n'
 printf '  pacman -S --needed --noconfirm lan-mouse\n'
 printf '  ufw allow in on %s from %s to any port %s proto udp\n' "$device" "$peer" "$LAN_MOUSE_PORT"
-printf '  ufw allow in on %s from %s to any port %s proto tcp\n\n' "$device" "$peer" "$OMAKVM_CLIP_PORT"
+printf '  ufw allow in on %s from %s to any port %s proto tcp\n\n' "$device" "$peer" "$OMATAIL_KVM_CLIP_PORT"
 printf 'Both steps are safe to repeat: pacman skips an installed package and ufw\n'
 printf 'skips a rule it already has.\n\n'
 
@@ -68,8 +68,8 @@ fi
 
 if command -v ufw >/dev/null 2>&1; then
   printf '==> Opening the firewall to %s\n' "$peer"
-  sudo ufw allow in on "$device" from "$peer" to any port "$LAN_MOUSE_PORT" proto udp comment 'Omakvm: keyboard and mouse' || status=1
-  sudo ufw allow in on "$device" from "$peer" to any port "$OMAKVM_CLIP_PORT" proto tcp comment 'Omakvm: clipboard' || status=1
+  sudo ufw allow in on "$device" from "$peer" to any port "$LAN_MOUSE_PORT" proto udp comment 'Omatail KVM: keyboard and mouse' || status=1
+  sudo ufw allow in on "$device" from "$peer" to any port "$OMATAIL_KVM_CLIP_PORT" proto tcp comment 'Omatail KVM: clipboard' || status=1
 else
   printf '==> ufw is not installed, so there is no firewall rule to add.\n'
 fi
@@ -84,7 +84,7 @@ fi
 # the services, and pairing with the peer.
 if position=$(stored_position); then
   printf '==> Starting keyboard, mouse and clipboard sharing\n'
-  "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/omakvm" configure "$peer" "$position" || status=1
+  "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/omatail-kvm" configure "$peer" "$position" || status=1
   printf '\n'
 fi
 

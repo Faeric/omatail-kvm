@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Omakvm: share one keyboard, mouse and clipboard between two Omarchy machines.
+# Omatail KVM: share one keyboard, mouse and clipboard between two Omarchy machines.
 #
 # Usage:
-#   omakvm candidates                      Tailscale machines that could be the peer, as JSON
-#   omakvm hint <address>                  the edge that peer expects this machine to put it on
-#   omakvm configure <address> [position]  choose the peer and the screen edge it sits on
-#   omakvm pair                            exchange lan-mouse fingerprints with the peer
-#   omakvm status [--json]                 what is installed, running and reachable
-#   omakvm enable | disable                start or stop sharing
-#   omakvm pause | resume                  hold or release clipboard syncing only
-#   omakvm setup                           open the privileged step in a terminal
-#   omakvm remove                          stop sharing and remove the units
+#   omatail-kvm candidates                      Tailscale machines that could be the peer, as JSON
+#   omatail-kvm hint <address>                  the edge that peer expects this machine to put it on
+#   omatail-kvm configure <address> [position]  choose the peer and the screen edge it sits on
+#   omatail-kvm pair                            exchange lan-mouse fingerprints with the peer
+#   omatail-kvm status [--json]                 what is installed, running and reachable
+#   omatail-kvm enable | disable                start or stop sharing
+#   omatail-kvm pause | resume                  hold or release clipboard syncing only
+#   omatail-kvm setup                           open the privileged step in a terminal
+#   omatail-kvm remove                          stop sharing and remove the units
 #
 # Nothing here needs root. The single privileged step, installing lan-mouse and
-# opening the firewall to the peer, is scripts/setup, which `omakvm setup`
+# opening the firewall to the peer, is scripts/setup, which `omatail-kvm setup`
 # opens in a terminal so the password prompt is visible.
 
 set -uo pipefail
@@ -21,19 +21,19 @@ set -uo pipefail
 here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 source "$here/lib.sh"
 
-KVM_UNIT=omakvm-lan-mouse.service
-CLIP_SOCKET_UNIT=omakvm-clip.socket
-CLIP_WATCH_UNIT=omakvm-clip-watch.service
+KVM_UNIT=omatail-kvm-lan-mouse.service
+CLIP_SOCKET_UNIT=omatail-kvm-clip.socket
+CLIP_WATCH_UNIT=omatail-kvm-clip-watch.service
 
 die() {
-  log "omakvm: $*"
+  log "omatail-kvm: $*"
   exit 1
 }
 
 # ask <path>: one short answer from the peer, or failure.
 ask_peer() {
   curl --silent --fail --noproxy '*' --connect-timeout 3 --max-time 6 --max-filesize 256 \
-    "http://$peer_address:$OMAKVM_CLIP_PORT$1" 2>/dev/null
+    "http://$peer_address:$OMATAIL_KVM_CLIP_PORT$1" 2>/dev/null
 }
 
 load_peer() {
@@ -81,8 +81,8 @@ write_lan_mouse_config() {
   mkdir -p -- "$LAN_MOUSE_DIR" || return 1
 
   # Whatever was there before the first run is kept aside, once.
-  if [[ -s $LAN_MOUSE_CONFIG && ! -e $LAN_MOUSE_CONFIG.before-omakvm ]]; then
-    cp -p -- "$LAN_MOUSE_CONFIG" "$LAN_MOUSE_CONFIG.before-omakvm" || return 1
+  if [[ -s $LAN_MOUSE_CONFIG && ! -e $LAN_MOUSE_CONFIG.before-omatail-kvm ]]; then
+    cp -p -- "$LAN_MOUSE_CONFIG" "$LAN_MOUSE_CONFIG.before-omatail-kvm" || return 1
   fi
 
   tmp=$(mktemp -- "$LAN_MOUSE_CONFIG.XXXXXX") || return 1
@@ -112,14 +112,14 @@ configure() {
   fi
   valid_position "$position" || die "$(printable "$position") is not left, right, top or bottom"
 
-  mkdir -p -- "$OMAKVM_CONFIG_DIR" || die "cannot create $OMAKVM_CONFIG_DIR"
+  mkdir -p -- "$OMATAIL_KVM_CONFIG_DIR" || die "cannot create $OMATAIL_KVM_CONFIG_DIR"
   write_state "$PEERS_FILE" "$address $name" || die 'could not save the peer'
   write_state "$POSITION_FILE" "$position" || die 'could not save the position'
 
   # The choice is kept either way; the privileged step picks it up and comes
   # back here once lan-mouse is in place.
   if ! command -v lan-mouse >/dev/null 2>&1; then
-    printf 'Saved. lan-mouse is not installed yet; run: omakvm setup\n'
+    printf 'Saved. lan-mouse is not installed yet; run: omatail-kvm setup\n'
     return 4
   fi
 
@@ -149,7 +149,7 @@ wait_for_daemon() {
 pair() {
   local fingerprint stale changed=0
 
-  load_peer || die 'no peer is configured; run: omakvm configure <address> <position>'
+  load_peer || die 'no peer is configured; run: omatail-kvm configure <address> <position>'
 
   fingerprint=$(ask_peer /fingerprint) || {
     printf 'Waiting for %s: it has not chosen this machine as its peer yet.\n' "$peer_name"
@@ -178,7 +178,7 @@ pair() {
   # stop after one round.
   if ((changed)); then
     curl --silent --noproxy '*' --connect-timeout 3 --max-time 6 --request POST --output /dev/null \
-      "http://$peer_address:$OMAKVM_CLIP_PORT/hello" 2>/dev/null || true
+      "http://$peer_address:$OMATAIL_KVM_CLIP_PORT/hello" 2>/dev/null || true
   fi
   return 0
 }
@@ -200,7 +200,7 @@ firewall_state() {
     return
   }
   if grep -qE "^### tuple ### allow udp $LAN_MOUSE_PORT [^ ]+ any $address " "$rules" &&
-    grep -qE "^### tuple ### allow tcp $OMAKVM_CLIP_PORT [^ ]+ any $address " "$rules"; then
+    grep -qE "^### tuple ### allow tcp $OMATAIL_KVM_CLIP_PORT [^ ]+ any $address " "$rules"; then
     printf open
   else
     printf closed
@@ -265,13 +265,13 @@ set_running() {
     systemctl --user enable --now --quiet "$CLIP_SOCKET_UNIT" "$CLIP_WATCH_UNIT" "$KVM_UNIT"
   else
     systemctl --user disable --now --quiet "$CLIP_SOCKET_UNIT" "$CLIP_WATCH_UNIT" "$KVM_UNIT"
-    systemctl --user stop 'omakvm-clip@*.service' 2>/dev/null
+    systemctl --user stop 'omatail-kvm-clip@*.service' 2>/dev/null
   fi
 }
 
 open_setup() {
   local command
-  load_peer || die 'choose the peer first: omakvm configure <address> <position>'
+  load_peer || die 'choose the peer first: omatail-kvm configure <address> <position>'
   # The launcher takes one string and hands it to a shell.
   printf -v command '%q %q' "$here/setup" "$peer_address"
   exec omarchy-launch-floating-terminal-with-presentation "$command"

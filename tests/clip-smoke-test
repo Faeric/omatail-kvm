@@ -104,8 +104,8 @@ wait_arrivals() {
 # Remote peer: fake clipboard.
 systemd-socket-activate -l "127.0.0.1:$remote_port" --accept --inetd \
   -E PATH="$work/bin:$PATH" \
-  -E OMAKVM_CONFIG_DIR="$work/remote/config" \
-  -E OMAKVM_RUNTIME_DIR="$work/remote/run" \
+  -E OMATAIL_KVM_CONFIG_DIR="$work/remote/config" \
+  -E OMATAIL_KVM_RUNTIME_DIR="$work/remote/run" \
   -E FAKE_CLIP="$work/remote/clip" \
   -E REMOTE_ADDR=127.0.0.1 -E HOME -E XDG_RUNTIME_DIR \
   "$root/scripts/clip-receive" >"$work/remote.log" 2>&1 &
@@ -114,14 +114,14 @@ pids+=($!)
 # Local receiver: the real wl-copy.
 systemd-socket-activate -l "127.0.0.1:$local_port" --accept --inetd \
   -E PATH -E WAYLAND_DISPLAY -E XDG_RUNTIME_DIR -E HOME \
-  -E OMAKVM_CONFIG_DIR="$work/local/config" \
-  -E OMAKVM_RUNTIME_DIR="$work/local/run" \
+  -E OMATAIL_KVM_CONFIG_DIR="$work/local/config" \
+  -E OMATAIL_KVM_RUNTIME_DIR="$work/local/run" \
   -E REMOTE_ADDR=127.0.0.1 \
   "$root/scripts/clip-receive" >"$work/local.log" 2>&1 &
 pids+=($!)
 
 # Local watcher: the real wl-paste, exactly as the service runs it.
-OMAKVM_CONFIG_DIR="$work/local/config" OMAKVM_RUNTIME_DIR="$work/local/run" OMAKVM_CLIP_PORT="$remote_port" \
+OMATAIL_KVM_CONFIG_DIR="$work/local/config" OMATAIL_KVM_RUNTIME_DIR="$work/local/run" OMATAIL_KVM_CLIP_PORT="$remote_port" \
   "$root/scripts/clip-watch" >"$work/watch.log" 2>&1 &
 pids+=($!)
 
@@ -141,7 +141,7 @@ base=$(arrivals)
 
 printf 'Copies made here leave for the peer\n'
 
-text="omakvm smoke test $(date +%H:%M:%S) é√"
+text="omatail-kvm smoke test $(date +%H:%M:%S) é√"
 printf '%s' "$text" | wl-copy
 check "a text copy is picked up by the watcher" wait_arrivals $((base + 1))
 check "it arrives unchanged" test "$(cat "$work/remote/clip/data" 2>/dev/null)" = "$text"
@@ -164,7 +164,7 @@ printf 'Clips from the peer land here and are not sent back\n'
 
 post() {
   curl -s -o /dev/null -w '%{http_code}' --max-time 10 --noproxy '*' \
-    -H 'Expect:' -H "Content-Type: $1" -H "X-Omakvm-Sha256: $(sha256sum <"$2" | cut -d' ' -f1)" \
+    -H 'Expect:' -H "Content-Type: $1" -H "X-Omatail-Kvm-Sha256: $(sha256sum <"$2" | cut -d' ' -f1)" \
     --data-binary "@$2" "http://127.0.0.1:$local_port/clip"
 }
 

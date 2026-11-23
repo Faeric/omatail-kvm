@@ -1,5 +1,5 @@
 {
-  "title": "Omakvm",
+  "title": "Omatail KVM",
   "status.checking": "Checking…",
   "status.unconfigured": "No machine chosen",
   "status.needsSetup": "Installation to finish",
@@ -49,5 +49,5 @@
   "row.needApply": "Press Apply to set it up",
   "toggle.on": "Start sharing",
   "toggle.off": "Stop sharing",
-  "tooltip": "Omakvm: %1"
+  "tooltip": "Omatail KVM: %1"
 }

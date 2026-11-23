@@ -5,17 +5,17 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 
-// The Omakvm panel: choose the other machine and the screen edge it sits on,
+// The Omatail KVM panel: choose the other machine and the screen edge it sits on,
 // see what is working, and switch sharing on or off.
 //
-// Everything it knows comes from scripts/omakvm, which it runs as a child
+// Everything it knows comes from scripts/omatail-kvm, which it runs as a child
 // process and reads as JSON. Machine names come from Tailscale and from the
 // other machine, so every piece of text that carries one is shown as plain
 // text and passes through plain() first.
 Panel {
   id: root
-  moduleName: "io.github.faeric.omakvm"
-  ipcTarget: "io.github.faeric.omakvm"
+  moduleName: "io.github.faeric.omatail-kvm"
+  ipcTarget: "io.github.faeric.omatail-kvm"
   // BarWidget.qml owns the single IpcHandler this target allows.
   manageIpc: false
 
@@ -41,9 +41,9 @@ Panel {
     try { text = decodeURIComponent(text.slice(7)) } catch (e) { return "" }
     return text.replace(/\/+$/, "")
   }
-  readonly property string cli: pluginDir + "/scripts/omakvm"
+  readonly property string cli: pluginDir + "/scripts/omatail-kvm"
 
-  // ---- State, as scripts/omakvm reports it --------------------------------
+  // ---- State, as scripts/omatail-kvm reports it --------------------------------
 
   property bool loaded: false
   property bool installed: false

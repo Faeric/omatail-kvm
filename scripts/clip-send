@@ -27,12 +27,12 @@ mapfile -t peers < <(peer_addresses)
 ((${#peers[@]})) || exit 0
 
 ensure_runtime_dir || {
-  log "clip-send: runtime directory $OMAKVM_RUNTIME_DIR is not usable"
+  log "clip-send: runtime directory $OMATAIL_KVM_RUNTIME_DIR is not usable"
   exit 1
 }
 
 # One send at a time, so two quick copies arrive in the order they were made.
-exec 9>"$OMAKVM_RUNTIME_DIR/clip-send.lock"
+exec 9>"$OMATAIL_KVM_RUNTIME_DIR/clip-send.lock"
 flock -w 30 9 || exit 0
 
 types=$(timeout 2s wl-paste --list-types 2>/dev/null) || exit 0
@@ -52,7 +52,7 @@ else
   exit 0
 fi
 
-payload=$(mktemp -- "$OMAKVM_RUNTIME_DIR/clip-out.XXXXXX") || exit 1
+payload=$(mktemp -- "$OMATAIL_KVM_RUNTIME_DIR/clip-out.XXXXXX") || exit 1
 trap 'rm -f -- "$payload"' EXIT
 
 # The owner streams the copy and can stall, so the read is bounded; a copy cut
@@ -61,8 +61,8 @@ timeout 10s "${reader[@]}" >"$payload" 2>/dev/null || exit 0
 
 size=$(stat -c %s -- "$payload") || exit 1
 ((size > 0)) || exit 0
-if ((size > OMAKVM_CLIP_MAX_BYTES)); then
-  log "clip-send: skipped a $size byte copy, over the $OMAKVM_CLIP_MAX_BYTES byte limit"
+if ((size > OMATAIL_KVM_CLIP_MAX_BYTES)); then
+  log "clip-send: skipped a $size byte copy, over the $OMATAIL_KVM_CLIP_MAX_BYTES byte limit"
   exit 0
 fi
 
@@ -72,9 +72,9 @@ sha=$(sha256_file "$payload") || exit 1
 push() {
   curl --silent --show-error --fail --noproxy '*' \
     --connect-timeout 3 --max-time 60 \
-    -H 'Expect:' -H "Content-Type: $mime" -H "X-Omakvm-Sha256: $sha" \
+    -H 'Expect:' -H "Content-Type: $mime" -H "X-Omatail-Kvm-Sha256: $sha" \
     --data-binary "@$payload" --output /dev/null \
-    "http://$1:$OMAKVM_CLIP_PORT/clip"
+    "http://$1:$OMATAIL_KVM_CLIP_PORT/clip"
 }
 
 delivered=0

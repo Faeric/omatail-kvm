@@ -48,7 +48,7 @@ chmod +x "$work/bin/wl-paste" "$work/bin/wl-copy" "$work/bin/systemd-run"
 
 # A throwaway certificate stands in for lan-mouse's on side B.
 mkdir -p "$work"/{a,b}/lan-mouse
-openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 -subj /CN=omakvm-test \
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 -subj /CN=omatail-kvm-test \
   -keyout "$work/b/lan-mouse/key.pem" -out "$work/b/lan-mouse/cert.pem" >/dev/null 2>&1
 cat "$work/b/lan-mouse/key.pem" "$work/b/lan-mouse/cert.pem" >"$work/b/lan-mouse/lan-mouse.pem"
 
@@ -74,9 +74,9 @@ side_env() {
   local side="$1"
   shift
   env PATH="$work/bin:$PATH" \
-    OMAKVM_CONFIG_DIR="$work/$side/config" \
-    OMAKVM_RUNTIME_DIR="$work/$side/run" \
-    OMAKVM_LAN_MOUSE_DIR="$work/$side/lan-mouse" \
+    OMATAIL_KVM_CONFIG_DIR="$work/$side/config" \
+    OMATAIL_KVM_RUNTIME_DIR="$work/$side/run" \
+    OMATAIL_KVM_LAN_MOUSE_DIR="$work/$side/lan-mouse" \
     FAKE_CLIP="$work/$side/clip" \
     "$@"
 }
@@ -86,7 +86,7 @@ send_log="$work/send.log"
 send() {
   local side="$1" to_port="$2"
   shift 2
-  side_env "$side" OMAKVM_CLIP_PORT="$to_port" "$@" "$root/scripts/clip-send" </dev/null 2>"$send_log"
+  side_env "$side" OMATAIL_KVM_CLIP_PORT="$to_port" "$@" "$root/scripts/clip-send" </dev/null 2>"$send_log"
 }
 
 set_clip() {
@@ -125,15 +125,15 @@ receive_body() {
 
 request() {
   local mime="$1" length="$2" checksum="$3" body="$4"
-  printf 'POST /clip HTTP/1.1\r\nHost: test\r\nContent-Type: %s\r\nContent-Length: %s\r\nX-Omakvm-Sha256: %s\r\n\r\n' \
+  printf 'POST /clip HTTP/1.1\r\nHost: test\r\nContent-Type: %s\r\nContent-Length: %s\r\nX-Omatail-Kvm-Sha256: %s\r\n\r\n' \
     "$mime" "$length" "$checksum"
   cat -- "$body"
 }
 
 systemd-socket-activate -l "127.0.0.1:$port" --accept --inetd \
   -E PATH="$work/bin:$PATH" \
-  -E OMAKVM_CONFIG_DIR="$work/b/config" \
-  -E OMAKVM_RUNTIME_DIR="$work/b/run" \
+  -E OMATAIL_KVM_CONFIG_DIR="$work/b/config" \
+  -E OMATAIL_KVM_RUNTIME_DIR="$work/b/run" \
   -E FAKE_CLIP="$work/b/clip" \
   -E REMOTE_ADDR=127.0.0.1 \
   -E HOME -E XDG_RUNTIME_DIR \
@@ -234,7 +234,7 @@ rm -f "$work/a/run/clip-paused"
 
 head -c 4096 /dev/urandom >"$work/big"
 set_clip a 'image/png\n' "$work/big"
-send a "$port" OMAKVM_CLIP_MAX_BYTES=1024
+send a "$port" OMATAIL_KVM_CLIP_MAX_BYTES=1024
 check "a copy over the size limit is skipped" grep -q 'over the 1024 byte limit' "$send_log"
 
 printf 'Peer away\n'
@@ -309,7 +309,7 @@ check "a position that is not an edge is not passed on" test "$(receive 127.0.0.
 
 printf 'POST /hello HTTP/1.1\r\nContent-Length: 0\r\n\r\n' >"$work/req"
 check "a hello from the peer is accepted" test "$(receive 127.0.0.1 "$work/req")" = 'HTTP/1.1 204 No Content'
-check "and starts pairing on this side" grep -q -- "--user --collect --quiet $root/scripts/omakvm pair" "$work/b/clip/systemd-run.calls"
+check "and starts pairing on this side" grep -q -- "--user --collect --quiet $root/scripts/omatail-kvm pair" "$work/b/clip/systemd-run.calls"
 rm -f "$work/b/clip/systemd-run.calls"
 check "a hello from anyone else gets 403" test "$(receive 10.9.9.9 "$work/req")" = 'HTTP/1.1 403 Forbidden'
 check "and starts nothing" test ! -e "$work/b/clip/systemd-run.calls"

@@ -12,7 +12,7 @@ here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 source "$here/lib.sh"
 
 unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-unit=omakvm-lan-mouse.service
+unit=omatail-kvm-lan-mouse.service
 lan_mouse_config="${XDG_CONFIG_HOME:-$HOME/.config}/lan-mouse/config.toml"
 
 # On Hyprland lan-mouse picks the input-capture portal by default. With it the
@@ -60,7 +60,7 @@ install_unit() {
   mkdir -p -- "$unit_dir" || return 1
   cat >"$unit_dir/$unit" <<EOF
 [Unit]
-Description=Omakvm keyboard and mouse sharing (lan-mouse)
+Description=Omatail KVM keyboard and mouse sharing (lan-mouse)
 PartOf=graphical-session.target
 After=graphical-session.target
 

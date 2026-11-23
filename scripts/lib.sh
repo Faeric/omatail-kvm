@@ -1,43 +1,43 @@
 #!/usr/bin/env bash
-# Shared helpers for the Omakvm clipboard relay. Sourced, never executed.
+# Shared helpers for the Omatail KVM clipboard relay. Sourced, never executed.
 #
 # The relay keeps no clipboard of its own. Each machine keeps its ordinary
 # Wayland clipboard; a copy made on one is pushed to the peers, which place it
 # on theirs with wl-copy. Omarchy's clipboard history then records it like any
 # other copy.
 
-OMAKVM_CLIP_PORT="${OMAKVM_CLIP_PORT:-4244}"
-OMAKVM_CLIP_MAX_BYTES="${OMAKVM_CLIP_MAX_BYTES:-33554432}" # 32 MiB
+OMATAIL_KVM_CLIP_PORT="${OMATAIL_KVM_CLIP_PORT:-4244}"
+OMATAIL_KVM_CLIP_MAX_BYTES="${OMATAIL_KVM_CLIP_MAX_BYTES:-33554432}" # 32 MiB
 
-OMAKVM_CONFIG_DIR="${OMAKVM_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/omakvm}"
-OMAKVM_RUNTIME_DIR="${OMAKVM_RUNTIME_DIR:-${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set}/omakvm}"
+OMATAIL_KVM_CONFIG_DIR="${OMATAIL_KVM_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/omatail-kvm}"
+OMATAIL_KVM_RUNTIME_DIR="${OMATAIL_KVM_RUNTIME_DIR:-${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set}/omatail-kvm}"
 
 # One peer per line: "<ipv4-address> [name]". Lines starting with # are ignored.
-PEERS_FILE="$OMAKVM_CONFIG_DIR/peers"
+PEERS_FILE="$OMATAIL_KVM_CONFIG_DIR/peers"
 
 # Checksum of the content both sides are known to hold. It is what stops a
 # received clip from being sent straight back, and a repeated copy from being
 # sent twice.
-SYNCED_FILE="$OMAKVM_RUNTIME_DIR/clip-synced"
+SYNCED_FILE="$OMATAIL_KVM_RUNTIME_DIR/clip-synced"
 
 # Present while syncing is paused. Lives in the runtime directory on purpose:
 # a pause does not outlive the session.
-PAUSE_FILE="$OMAKVM_RUNTIME_DIR/clip-paused"
+PAUSE_FILE="$OMATAIL_KVM_RUNTIME_DIR/clip-paused"
 
 # Last transfer, for the bar widget: "<epoch> <in|out> <mime> <bytes> <peer>".
-LAST_FILE="$OMAKVM_RUNTIME_DIR/clip-last"
+LAST_FILE="$OMATAIL_KVM_RUNTIME_DIR/clip-last"
 
 MIME_TEXT='text/plain;charset=utf-8'
 MIME_PNG='image/png'
 
 # Where this machine keeps the screen edge its peer sits on, for the peer to
 # ask: a machine configured second takes the opposite edge without being told.
-POSITION_FILE="$OMAKVM_CONFIG_DIR/position"
+POSITION_FILE="$OMATAIL_KVM_CONFIG_DIR/position"
 
 # lan-mouse does the keyboard and mouse sharing. Its certificate is this
 # machine's identity for pairing; its config lists who may send input here.
 LAN_MOUSE_PORT=4242
-LAN_MOUSE_DIR="${OMAKVM_LAN_MOUSE_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/lan-mouse}"
+LAN_MOUSE_DIR="${OMATAIL_KVM_LAN_MOUSE_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/lan-mouse}"
 LAN_MOUSE_CONFIG="$LAN_MOUSE_DIR/config.toml"
 LAN_MOUSE_CERT="$LAN_MOUSE_DIR/lan-mouse.pem"
 
@@ -48,8 +48,8 @@ log() {
 # The runtime directory holds clipboard payloads in transit, so it must be
 # ours and private.
 ensure_runtime_dir() {
-  mkdir -p -m 700 -- "$OMAKVM_RUNTIME_DIR" 2>/dev/null || return 1
-  [[ -d $OMAKVM_RUNTIME_DIR && -O $OMAKVM_RUNTIME_DIR ]]
+  mkdir -p -m 700 -- "$OMATAIL_KVM_RUNTIME_DIR" 2>/dev/null || return 1
+  [[ -d $OMATAIL_KVM_RUNTIME_DIR && -O $OMATAIL_KVM_RUNTIME_DIR ]]
 }
 
 valid_ipv4() {

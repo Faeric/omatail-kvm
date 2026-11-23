@@ -5,7 +5,7 @@
 # connection on stdin and stdout and the sender's address in REMOTE_ADDR. The
 # exchange is a single HTTP request, which lets curl be the sending side:
 #
-#   POST /clip          Content-Type, Content-Length, X-Omakvm-Sha256, then the bytes
+#   POST /clip          Content-Type, Content-Length, X-Omatail-Kvm-Sha256, then the bytes
 #   GET  /ping          reachability check for the bar widget
 #   GET  /fingerprint   this machine's lan-mouse fingerprint, for pairing
 #   GET  /position      the screen edge this machine has its peer on
@@ -78,7 +78,7 @@ while read_line; do
   case "${name,,}" in
   content-length) size="$value" ;;
   content-type) mime="$value" ;;
-  x-omakvm-sha256) sha="$value" ;;
+  x-omatail-kvm-sha256) sha="$value" ;;
   esac
 done
 ((complete)) || refuse '400 Bad Request' 'incomplete headers'
@@ -108,7 +108,7 @@ hello)
   respond '204 No Content'
   # Pairing outlives this connection, so it runs as a unit of its own rather
   # than as a child that goes when this one does.
-  systemd-run --user --collect --quiet "$here/omakvm" pair >/dev/null 2>&1 ||
+  systemd-run --user --collect --quiet "$here/omatail-kvm" pair >/dev/null 2>&1 ||
     log "clip-receive: could not start pairing after hello from $remote"
   exit 0
   ;;
@@ -124,11 +124,11 @@ esac
 [[ $size =~ ^[0-9]{1,12}$ ]] || refuse '411 Length Required'
 size=$((10#$size))
 ((size > 0)) || refuse '400 Bad Request' 'empty clip'
-((size <= OMAKVM_CLIP_MAX_BYTES)) || refuse '413 Content Too Large' "$size bytes"
+((size <= OMATAIL_KVM_CLIP_MAX_BYTES)) || refuse '413 Content Too Large' "$size bytes"
 [[ $sha =~ ^[0-9a-f]{64}$ ]] || refuse '400 Bad Request' 'missing checksum'
 
 ensure_runtime_dir || refuse '500 Internal Server Error' 'runtime directory is not usable'
-payload=$(mktemp -- "$OMAKVM_RUNTIME_DIR/clip-in.XXXXXX") || refuse '500 Internal Server Error'
+payload=$(mktemp -- "$OMATAIL_KVM_RUNTIME_DIR/clip-in.XXXXXX") || refuse '500 Internal Server Error'
 trap 'rm -f -- "$payload"' EXIT
 
 timeout 60s head -c "$size" >"$payload"

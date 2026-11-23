@@ -1,13 +1,13 @@
 # Third-party notices
 
-Omakvm bundles no third-party program. It installs and drives the ones below,
+Omatail KVM bundles no third-party program. It installs and drives the ones below,
 which keep their own licenses.
 
 ## Lan Mouse
 
 Keyboard and mouse sharing is done by
 [Lan Mouse](https://github.com/feschber/lan-mouse) by Ferdinand Schober and
-contributors, licensed under GPL-3.0-or-later. Omakvm installs it from the
+contributors, licensed under GPL-3.0-or-later. Omatail KVM installs it from the
 distribution's own package repository and runs it as a separate program; no
 Lan Mouse code is part of this repository.
 
@@ -49,5 +49,5 @@ Elgert, which is licensed as follows:
 
 ## Omarchy
 
-Omakvm is an independent community project. It is not an official Omarchy
+Omatail KVM is an independent community project. It is not an official Omarchy
 plugin and is not endorsed by Omarchy or 37signals.

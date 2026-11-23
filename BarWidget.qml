@@ -2,7 +2,7 @@ import QtQuick
 import Quickshell.Io
 import qs.Ui
 
-// Omakvm in the bar: one icon that says whether keyboard, mouse and clipboard
+// Omatail KVM in the bar: one icon that says whether keyboard, mouse and clipboard
 // are being shared with the other machine, and the host for the panel that
 // sets it up.
 //
@@ -11,7 +11,7 @@ import qs.Ui
 // it before the Loader has produced the panel.
 BarWidget {
   id: root
-  moduleName: "io.github.faeric.omakvm"
+  moduleName: "io.github.faeric.omatail-kvm"
 
   // Two screens while sharing, one while not.
   readonly property string iconSharing: String.fromCodePoint(0xF037A)
@@ -19,7 +19,7 @@ BarWidget {
 
   readonly property bool sharing: panelLoader.item ? panelLoader.item.sharing === true : false
   readonly property string tier: panelLoader.item ? String(panelLoader.item.tier) : "unknown"
-  readonly property string tooltipText: panelLoader.item ? String(panelLoader.item.tooltipText) : "Omakvm"
+  readonly property string tooltipText: panelLoader.item ? String(panelLoader.item.tooltipText) : "Omatail KVM"
 
   // Only a fault takes the urgent colour. Sharing switched off is a state the
   // user chose, and the single-screen glyph already says so.
@@ -63,7 +63,7 @@ BarWidget {
   }
 
   IpcHandler {
-    target: "io.github.faeric.omakvm"
+    target: "io.github.faeric.omatail-kvm"
 
     function open(): void { root.open() }
     function close(): void { root.close() }

@@ -7,15 +7,15 @@ project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_dir"
 
 omarchy plugin validate "$project_dir"
-jq -e '.id == "io.github.faeric.omakvm" and .entryPoints.barWidget == "BarWidget.qml"' manifest.json >/dev/null
+jq -e '.id == "io.github.faeric.omatail-kvm" and .entryPoints.barWidget == "BarWidget.qml"' manifest.json >/dev/null
 
 for file in README.md LICENSE THIRD_PARTY_NOTICES.md BarWidget.qml Panel.qml; do
   test -f "$file"
 done
 
 # The widget and its panel answer to the id the manifest declares.
-grep -Fq 'moduleName: "io.github.faeric.omakvm"' BarWidget.qml
-grep -Fq 'moduleName: "io.github.faeric.omakvm"' Panel.qml
+grep -Fq 'moduleName: "io.github.faeric.omatail-kvm"' BarWidget.qml
+grep -Fq 'moduleName: "io.github.faeric.omatail-kvm"' Panel.qml
 
 for script in scripts/*; do
   bash -n "$script"
@@ -66,4 +66,4 @@ tests/clip-relay-test >/dev/null || {
   exit 1
 }
 
-printf 'All Omakvm checks passed.\n'
+printf 'All Omatail KVM checks passed.\n'

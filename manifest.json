@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "id": "io.github.faeric.omakvm",
-  "name": "Omakvm",
+  "id": "io.github.faeric.omatail-kvm",
+  "name": "Omatail KVM",
   "version": "0.1.0",
   "author": "Faeric",
   "license": "MIT",
-  "description": "Share one keyboard, mouse and clipboard between two Omarchy machines on the same Tailscale network.",
+  "description": "A software KVM over Tailscale: share one keyboard, mouse and clipboard between two Omarchy machines.",
   "keywords": [
     "kvm",
     "keyboard",
@@ -23,7 +23,7 @@
     "barWidget": "BarWidget.qml"
   },
   "barWidget": {
-    "displayName": "Omakvm",
+    "displayName": "Omatail KVM",
     "description": "Push the pointer off the edge of one screen and carry on typing on the other machine. Choose the machine and the edge it sits on; installing and pairing follow.",
     "category": "System",
     "aliases": [
