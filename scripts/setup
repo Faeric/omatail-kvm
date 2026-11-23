@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# The one privileged step: install lan-mouse and let one peer reach it.
+#
+# Usage: setup <peer-tailscale-ipv4>
+#
+# Meant to run in a visible terminal, so the sudo prompt is seen and answered
+# by the person at the keyboard. The only commands it runs as root are the
+# fixed ones printed before the prompt. The peer address is the sole input: it
+# is validated here and passed to ufw as an argument, never as shell text.
+#
+# Both ports are opened to that one address, on the Tailscale interface only.
+# The clipboard relay does not encrypt on its own; staying on Tailscale is what
+# keeps a clip private and vouches for where it came from.
+
+set -uo pipefail
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib.sh"
+
+RESULT_FILE="$OMAKVM_RUNTIME_DIR/setup-result"
+
+finish() {
+  ensure_runtime_dir && write_state "$RESULT_FILE" "$1"
+  exit "$1"
+}
+
+if (($# != 1)); then
+  printf 'Usage: setup <peer-tailscale-ipv4>\n' >&2
+  exit 2
+fi
+peer="$1"
+
+if ! tailscale_ipv4 "$peer"; then
+  printf 'setup: %q is not a Tailscale IPv4 address (100.64.0.0/10); nothing was changed.\n' "$peer" >&2
+  finish 2
+fi
+
+device=$(ip -4 route get "$peer" 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n 1)
+if [[ $device != tailscale* ]]; then
+  printf 'setup: %s is not reached through Tailscale here (route goes through %s); nothing was changed.\n' \
+    "$peer" "${device:-nothing}" >&2
+  finish 2
+fi
+
+printf 'Omakvm setup\n============\n\n'
+printf 'This will run, as root:\n\n'
+printf '  pacman -S --needed --noconfirm lan-mouse\n'
+printf '  ufw allow in on %s from %s to any port %s proto udp\n' "$device" "$peer" "$LAN_MOUSE_PORT"
+printf '  ufw allow in on %s from %s to any port %s proto tcp\n\n' "$device" "$peer" "$OMAKVM_CLIP_PORT"
+printf 'Both steps are safe to repeat: pacman skips an installed package and ufw\n'
+printf 'skips a rule it already has.\n\n'
+
+# Ask for the password first, so the prompt is not buried in pacman output.
+if ! sudo -v; then
+  printf '\nsetup: authentication failed or was cancelled; nothing was changed.\n' >&2
+  finish 1
+fi
+printf '\n'
+
+status=0
+
+printf '==> Installing lan-mouse\n'
+if sudo pacman -S --needed --noconfirm -- lan-mouse && pacman -Q lan-mouse >/dev/null 2>&1; then
+  printf '==> lan-mouse is installed\n\n'
+else
+  printf '==> Installing lan-mouse FAILED\n\n' >&2
+  status=1
+fi
+
+if command -v ufw >/dev/null 2>&1; then
+  printf '==> Opening the firewall to %s\n' "$peer"
+  sudo ufw allow in on "$device" from "$peer" to any port "$LAN_MOUSE_PORT" proto udp comment 'Omakvm: keyboard and mouse' || status=1
+  sudo ufw allow in on "$device" from "$peer" to any port "$OMAKVM_CLIP_PORT" proto tcp comment 'Omakvm: clipboard' || status=1
+else
+  printf '==> ufw is not installed, so there is no firewall rule to add.\n'
+fi
+
+printf '\n'
+if ((status != 0)); then
+  printf 'Setup finished with errors; see above.\n'
+  finish "$status"
+fi
+
+# With the screen edge already chosen, finish the part that needs no root:
+# the services, and pairing with the peer.
+if position=$(stored_position); then
+  printf '==> Starting keyboard, mouse and clipboard sharing\n'
+  "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/omakvm" configure "$peer" "$position" || status=1
+  printf '\n'
+fi
+
+if ((status == 0)); then
+  printf 'Setup is complete.\n'
+else
+  printf 'Setup finished with errors; see above.\n'
+fi
+
+finish "$status"

@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# Install, remove or inspect the lan-mouse systemd user unit.
+#
+# Usage: kvm-service install | uninstall | status
+#
+# lan-mouse does the keyboard and mouse sharing. The package ships no unit, so
+# this one runs its daemon for as long as the graphical session lasts.
+
+set -uo pipefail
+
+here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+source "$here/lib.sh"
+
+unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+unit=omakvm-lan-mouse.service
+lan_mouse_config="${XDG_CONFIG_HOME:-$HOME/.config}/lan-mouse/config.toml"
+
+# On Hyprland lan-mouse picks the input-capture portal by default. With it the
+# compositor still runs its own shortcuts while the pointer is on the other
+# machine: Super+Space opens the menu here instead of there. The layer-shell
+# backend takes a keyboard-shortcuts-inhibitor for the time it holds the
+# keyboard, so those shortcuts travel with the rest of the typing.
+#
+# The setting goes in lan-mouse's own config rather than on the command line,
+# so it also applies when lan-mouse is started some other way. lan-mouse keeps
+# the key when it rewrites the file.
+use_layer_shell_capture() {
+  local tmp
+  mkdir -p -- "$(dirname -- "$lan_mouse_config")" || return 1
+  [[ -e $lan_mouse_config ]] || : >"$lan_mouse_config"
+
+  if grep -qE '^[[:space:]]*capture_backend[[:space:]]*=' "$lan_mouse_config"; then
+    sed -i -E 's|^[[:space:]]*capture_backend[[:space:]]*=.*|capture_backend = "layer-shell"|' "$lan_mouse_config"
+    return
+  fi
+
+  # A top-level key has to come before the first table.
+  tmp=$(mktemp -- "$lan_mouse_config.XXXXXX") || return 1
+  {
+    printf 'capture_backend = "layer-shell"\n'
+    cat -- "$lan_mouse_config"
+  } >"$tmp" && mv -f -- "$tmp" "$lan_mouse_config" || {
+    rm -f -- "$tmp"
+    return 1
+  }
+}
+
+install_unit() {
+  local binary
+  binary=$(command -v lan-mouse) || {
+    log "kvm-service: lan-mouse is not installed; run scripts/setup first"
+    return 1
+  }
+
+  # The daemon rewrites its config when it changes, so it is stopped before
+  # the file is edited.
+  systemctl --user stop "$unit" 2>/dev/null
+  use_layer_shell_capture || return 1
+
+  mkdir -p -- "$unit_dir" || return 1
+  cat >"$unit_dir/$unit" <<EOF
+[Unit]
+Description=Omakvm keyboard and mouse sharing (lan-mouse)
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=$binary daemon
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target
+EOF
+
+  systemctl --user daemon-reload || return 1
+  systemctl --user enable --quiet "$unit" || return 1
+  systemctl --user restart "$unit"
+}
+
+uninstall_unit() {
+  systemctl --user disable --now --quiet "$unit" 2>/dev/null
+  rm -f -- "$unit_dir/$unit"
+  systemctl --user daemon-reload
+}
+
+show_status() {
+  printf 'service   %s\n' "$(systemctl --user is-active "$unit" 2>/dev/null)"
+  journalctl --user -u "$unit" --no-pager -o cat -n 200 2>/dev/null |
+    sed -n 's/.*using \(capture\|emulation\) backend: \(.*\)/\1 \2/p' | tail -n 2 |
+    while read -r kind backend; do printf '%-9s %s\n' "$kind" "$backend"; done
+  timeout 5 lan-mouse cli list 2>/dev/null | sed 's/^/client    /'
+}
+
+case "${1:-}" in
+install)
+  install_unit || {
+    log "kvm-service: installing the unit failed"
+    exit 1
+  }
+  ;;
+uninstall)
+  uninstall_unit
+  ;;
+status)
+  show_status
+  ;;
+*)
+  printf 'Usage: kvm-service install | uninstall | status\n' >&2
+  exit 2
+  ;;
+esac

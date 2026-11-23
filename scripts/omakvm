@@ -1,0 +1,309 @@
+#!/usr/bin/env bash
+# Omakvm: share one keyboard, mouse and clipboard between two Omarchy machines.
+#
+# Usage:
+#   omakvm candidates                      Tailscale machines that could be the peer, as JSON
+#   omakvm hint <address>                  the edge that peer expects this machine to put it on
+#   omakvm configure <address> [position]  choose the peer and the screen edge it sits on
+#   omakvm pair                            exchange lan-mouse fingerprints with the peer
+#   omakvm status [--json]                 what is installed, running and reachable
+#   omakvm enable | disable                start or stop sharing
+#   omakvm pause | resume                  hold or release clipboard syncing only
+#   omakvm setup                           open the privileged step in a terminal
+#   omakvm remove                          stop sharing and remove the units
+#
+# Nothing here needs root. The single privileged step, installing lan-mouse and
+# opening the firewall to the peer, is scripts/setup, which `omakvm setup`
+# opens in a terminal so the password prompt is visible.
+
+set -uo pipefail
+
+here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+source "$here/lib.sh"
+
+KVM_UNIT=omakvm-lan-mouse.service
+CLIP_SOCKET_UNIT=omakvm-clip.socket
+CLIP_WATCH_UNIT=omakvm-clip-watch.service
+
+die() {
+  log "omakvm: $*"
+  exit 1
+}
+
+# ask <path>: one short answer from the peer, or failure.
+ask_peer() {
+  curl --silent --fail --noproxy '*' --connect-timeout 3 --max-time 6 --max-filesize 256 \
+    "http://$peer_address:$OMAKVM_CLIP_PORT$1" 2>/dev/null
+}
+
+load_peer() {
+  read -r peer_address peer_name < <(first_peer) || return 1
+}
+
+# hint <address>: the edge this machine should put that peer on, when the peer
+# already has this machine on the opposite one.
+hint() {
+  local answer
+  peer_address="$1"
+  answer=$(ask_peer /position) || return 1
+  opposite_position "$answer"
+}
+
+candidates() {
+  command -v tailscale >/dev/null 2>&1 || die 'tailscale is not installed'
+  tailscale status --json 2>/dev/null | jq -c '
+    [ (.Peer // {})[]
+      | select(.OS == "linux")
+      | { name: (.HostName // ""), address: ((.TailscaleIPs // [])[0] // ""), online: (.Online // false) }
+      | select(.address | test("^100\\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\\.[0-9]+\\.[0-9]+$"))
+    ] | sort_by((.online | not), .name)'
+}
+
+tailscale_name() {
+  tailscale status --json 2>/dev/null |
+    jq -r --arg address "$1" '(.Peer // {})[] | select((.TailscaleIPs // []) | index($address)) | .HostName' 2>/dev/null |
+    head -n 1
+}
+
+# Fingerprints already authorized, as config lines, so choosing a peer again
+# does not undo a pairing.
+authorized_lines() {
+  [[ -r $LAN_MOUSE_CONFIG ]] || return 0
+  sed -n '/^\[authorized_fingerprints\]/,/^\[/p' "$LAN_MOUSE_CONFIG" |
+    grep -E '^"([0-9a-f]{2}:){31}[0-9a-f]{2}" = "[A-Za-z0-9._-]{1,63}"$' || true
+}
+
+# lan-mouse's config is written whole: one peer, on one edge, entered as soon
+# as the daemon starts. Every value placed in it was validated first.
+write_lan_mouse_config() {
+  local address="$1" position="$2" kept tmp
+  kept=$(authorized_lines)
+  mkdir -p -- "$LAN_MOUSE_DIR" || return 1
+
+  # Whatever was there before the first run is kept aside, once.
+  if [[ -s $LAN_MOUSE_CONFIG && ! -e $LAN_MOUSE_CONFIG.before-omakvm ]]; then
+    cp -p -- "$LAN_MOUSE_CONFIG" "$LAN_MOUSE_CONFIG.before-omakvm" || return 1
+  fi
+
+  tmp=$(mktemp -- "$LAN_MOUSE_CONFIG.XXXXXX") || return 1
+  {
+    printf 'capture_backend = "layer-shell"\n\n'
+    printf '[[clients]]\nips = ["%s"]\nposition = "%s"\nactivate_on_startup = true\n\n' "$address" "$position"
+    printf '[authorized_fingerprints]\n'
+    [[ -n $kept ]] && printf '%s\n' "$kept"
+  } >"$tmp" && mv -f -- "$tmp" "$LAN_MOUSE_CONFIG" || {
+    rm -f -- "$tmp"
+    return 1
+  }
+}
+
+configure() {
+  local address="${1:-}" position="${2:-}" name answer
+
+  tailscale_ipv4 "$address" || die "$(printable "$address") is not a Tailscale IPv4 address"
+
+  name=$(tailscale_name "$address")
+  valid_peer_name "$name" || name=peer
+
+  # With no edge given, take the opposite of the one the peer has us on.
+  if [[ -z $position ]]; then
+    position=$(hint "$address") ||
+      die "no screen edge given and $name does not have one for this machine yet; give left, right, top or bottom"
+  fi
+  valid_position "$position" || die "$(printable "$position") is not left, right, top or bottom"
+
+  mkdir -p -- "$OMAKVM_CONFIG_DIR" || die "cannot create $OMAKVM_CONFIG_DIR"
+  write_state "$PEERS_FILE" "$address $name" || die 'could not save the peer'
+  write_state "$POSITION_FILE" "$position" || die 'could not save the position'
+
+  # The choice is kept either way; the privileged step picks it up and comes
+  # back here once lan-mouse is in place.
+  if ! command -v lan-mouse >/dev/null 2>&1; then
+    printf 'Saved. lan-mouse is not installed yet; run: omakvm setup\n'
+    return 4
+  fi
+
+  # The daemon rewrites its config as it runs, so it is stopped around the edit.
+  systemctl --user stop "$KVM_UNIT" 2>/dev/null
+  write_lan_mouse_config "$address" "$position" || die 'could not write the lan-mouse configuration'
+
+  "$here/clip-service" install >/dev/null || die 'could not install the clipboard relay'
+  "$here/kvm-service" install || die 'could not install the keyboard and mouse service'
+
+  printf '%s is on the %s.\n' "$name" "$position"
+  pair || true
+}
+
+# Give the daemon a moment to answer on its control socket after a start.
+wait_for_daemon() {
+  local attempt
+  for attempt in {1..20}; do
+    timeout 2s lan-mouse cli list >/dev/null 2>&1 && return 0
+    sleep 0.25
+  done
+  return 1
+}
+
+# Returns 0 when the peer is trusted here, 3 when it would not say who it is,
+# which is the ordinary case while it has not chosen this machine yet.
+pair() {
+  local fingerprint stale changed=0
+
+  load_peer || die 'no peer is configured; run: omakvm configure <address> <position>'
+
+  fingerprint=$(ask_peer /fingerprint) || {
+    printf 'Waiting for %s: it has not chosen this machine as its peer yet.\n' "$peer_name"
+    return 3
+  }
+  valid_fingerprint "$fingerprint" || die "$peer_name answered with something that is not a fingerprint"
+
+  if ! grep -qF "\"$fingerprint\"" "$LAN_MOUSE_CONFIG" 2>/dev/null; then
+    systemctl --user is-active --quiet "$KVM_UNIT" || systemctl --user start "$KVM_UNIT"
+    wait_for_daemon || die 'the lan-mouse daemon is not answering'
+
+    # A peer that was reinstalled has a new certificate; its old fingerprint
+    # stops being trusted when the new one is.
+    while read -r stale; do
+      [[ -n $stale ]] && timeout 5s lan-mouse cli remove-authorized-key "$stale" >/dev/null 2>&1
+    done < <(authorized_lines | sed -n "s/^\"\\([0-9a-f:]*\\)\" = \"$peer_name\"\$/\\1/p")
+
+    timeout 5s lan-mouse cli authorize-key "$peer_name" "$fingerprint" >/dev/null 2>&1 ||
+      die "could not authorize $peer_name"
+    timeout 5s lan-mouse cli save-config >/dev/null 2>&1
+    changed=1
+    printf 'Paired with %s.\n' "$peer_name"
+  fi
+
+  # Told only when something changed here, so two machines greeting each other
+  # stop after one round.
+  if ((changed)); then
+    curl --silent --noproxy '*' --connect-timeout 3 --max-time 6 --request POST --output /dev/null \
+      "http://$peer_address:$OMAKVM_CLIP_PORT/hello" 2>/dev/null || true
+  fi
+  return 0
+}
+
+unit_state() {
+  systemctl --user is-active "$1" 2>/dev/null || true
+}
+
+# Whether ufw lets the peer reach both ports. Its rules file is readable
+# without root on Omarchy; when it is not, the answer is "unknown", not a guess.
+firewall_state() {
+  local address="$1" rules=/etc/ufw/user.rules
+  command -v ufw >/dev/null 2>&1 || {
+    printf none
+    return
+  }
+  [[ -r $rules ]] || {
+    printf unknown
+    return
+  }
+  if grep -qE "^### tuple ### allow udp $LAN_MOUSE_PORT [^ ]+ any $address " "$rules" &&
+    grep -qE "^### tuple ### allow tcp $OMAKVM_CLIP_PORT [^ ]+ any $address " "$rules"; then
+    printf open
+  else
+    printf closed
+  fi
+}
+
+status() {
+  local installed=false address= name= position= firewall=unknown reachable=false paired=false
+  local last_when=0 last_direction= last_mime= last_size=0
+
+  command -v lan-mouse >/dev/null 2>&1 && installed=true
+  if load_peer; then
+    address="$peer_address"
+    name="$peer_name"
+    firewall=$(firewall_state "$address")
+    ask_peer /ping >/dev/null && reachable=true
+    authorized_lines | grep -q "= \"$name\"\$" && paired=true
+  fi
+  position=$(stored_position) || position=
+  [[ -r $LAST_FILE ]] && read -r last_when last_direction last_mime last_size _ <"$LAST_FILE"
+
+  jq -n \
+    --argjson installed "$installed" \
+    --arg address "$address" --arg name "$name" --arg position "$position" \
+    --arg firewall "$firewall" \
+    --argjson reachable "$reachable" --argjson paired "$paired" \
+    --arg kvm "$(unit_state "$KVM_UNIT")" \
+    --arg incoming "$(unit_state "$CLIP_SOCKET_UNIT")" \
+    --arg outgoing "$(unit_state "$CLIP_WATCH_UNIT")" \
+    --argjson paused "$([[ -e $PAUSE_FILE ]] && echo true || echo false)" \
+    --arg lastWhen "$last_when" --arg lastDirection "$last_direction" \
+    --arg lastMime "$last_mime" --arg lastSize "$last_size" '
+    {
+      installed: $installed,
+      peer: (if $address == "" then null else { address: $address, name: $name, position: $position } end),
+      firewall: $firewall,
+      reachable: $reachable,
+      paired: $paired,
+      kvm: $kvm,
+      clipboard: {
+        incoming: $incoming, outgoing: $outgoing, paused: $paused,
+        last: (if $lastDirection == "" then null
+               else { when: ($lastWhen | tonumber? // 0), direction: $lastDirection,
+                      mime: $lastMime, bytes: ($lastSize | tonumber? // 0) } end)
+      }
+    }'
+}
+
+status_text() {
+  status | jq -r '
+    "lan-mouse   \(if .installed then "installed" else "not installed" end)",
+    "peer        \(if .peer then "\(.peer.name) (\(.peer.address)) on the \(.peer.position)" else "none chosen" end)",
+    "firewall    \(.firewall)",
+    "reachable   \(if .reachable then "yes" else "no" end)",
+    "paired      \(if .paired then "yes" else "no" end)",
+    "keyboard    \(.kvm)",
+    "clipboard   in \(.clipboard.incoming), out \(.clipboard.outgoing)\(if .clipboard.paused then ", paused" else "" end)"'
+}
+
+set_running() {
+  if [[ $1 == on ]]; then
+    systemctl --user enable --now --quiet "$CLIP_SOCKET_UNIT" "$CLIP_WATCH_UNIT" "$KVM_UNIT"
+  else
+    systemctl --user disable --now --quiet "$CLIP_SOCKET_UNIT" "$CLIP_WATCH_UNIT" "$KVM_UNIT"
+    systemctl --user stop 'omakvm-clip@*.service' 2>/dev/null
+  fi
+}
+
+open_setup() {
+  local command
+  load_peer || die 'choose the peer first: omakvm configure <address> <position>'
+  # The launcher takes one string and hands it to a shell.
+  printf -v command '%q %q' "$here/setup" "$peer_address"
+  exec omarchy-launch-floating-terminal-with-presentation "$command"
+}
+
+case "${1:-}" in
+candidates) candidates ;;
+hint)
+  tailscale_ipv4 "${2:-}" || die 'hint needs a Tailscale IPv4 address'
+  hint "$2" && printf '\n'
+  ;;
+configure)
+  shift
+  configure "$@"
+  ;;
+pair) pair ;;
+status)
+  if [[ ${2:-} == --json ]]; then status; else status_text; fi
+  ;;
+enable) set_running on ;;
+disable) set_running off ;;
+pause)
+  ensure_runtime_dir && : >"$PAUSE_FILE"
+  ;;
+resume) rm -f -- "$PAUSE_FILE" ;;
+setup) open_setup ;;
+remove)
+  "$here/kvm-service" uninstall
+  "$here/clip-service" uninstall
+  ;;
+*)
+  sed -n '2,14s/^# \{0,1\}//p' "${BASH_SOURCE[0]}" >&2
+  exit 2
+  ;;
+esac

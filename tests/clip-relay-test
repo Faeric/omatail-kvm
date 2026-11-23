@@ -1,0 +1,319 @@
+#!/usr/bin/env bash
+# Exercises the clipboard relay on one machine.
+#
+# Two sides, A and B, each get their own config, runtime directory and a fake
+# clipboard: stand-ins for wl-paste and wl-copy that read and write files. The
+# real clipboard is never read or changed. B listens on a loopback port through
+# systemd-socket-activate, the same way the socket unit hands connections over.
+
+set -uo pipefail
+
+root=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
+work=$(mktemp -d) || exit 1
+listener=
+
+cleanup() {
+  [[ -n $listener ]] && kill "$listener" 2>/dev/null
+  rm -rf -- "$work"
+}
+trap cleanup EXIT
+
+mkdir -p "$work"/bin "$work"/{a,b}/{config,run,clip}
+chmod 700 "$work"/{a,b}/run
+
+cat >"$work/bin/wl-paste" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+--list-types) cat "$FAKE_CLIP/types" ;;
+--type) cat "$FAKE_CLIP/data" ;;
+esac
+EOF
+
+cat >"$work/bin/wl-copy" <<'EOF'
+#!/usr/bin/env bash
+# Called as: wl-copy --foreground --type <mime>
+cat >"$FAKE_CLIP/data.new" && mv "$FAKE_CLIP/data.new" "$FAKE_CLIP/data"
+case "$3" in
+text/plain*) printf 'text/plain;charset=utf-8\ntext/plain\nUTF8_STRING\n' >"$FAKE_CLIP/types" ;;
+*) printf '%s\n' "$3" >"$FAKE_CLIP/types" ;;
+esac
+date +%s%N >"$FAKE_CLIP/applied"
+EOF
+# Pairing starts a unit of its own; here it only leaves a trace of the call.
+cat >"$work/bin/systemd-run" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_CLIP/systemd-run.calls"
+EOF
+chmod +x "$work/bin/wl-paste" "$work/bin/wl-copy" "$work/bin/systemd-run"
+
+# A throwaway certificate stands in for lan-mouse's on side B.
+mkdir -p "$work"/{a,b}/lan-mouse
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 -subj /CN=omakvm-test \
+  -keyout "$work/b/lan-mouse/key.pem" -out "$work/b/lan-mouse/cert.pem" >/dev/null 2>&1
+cat "$work/b/lan-mouse/key.pem" "$work/b/lan-mouse/cert.pem" >"$work/b/lan-mouse/lan-mouse.pem"
+
+port=$((20000 + RANDOM % 20000))
+closed_port=$((port + 1))
+printf '127.0.0.1 loopback\n' >"$work/a/config/peers"
+printf '# comment\n\n127.0.0.1 loopback\n' >"$work/b/config/peers"
+
+passed=0 failed=0
+check() {
+  local name="$1"
+  shift
+  if "$@"; then
+    passed=$((passed + 1))
+    printf '  ok    %s\n' "$name"
+  else
+    failed=$((failed + 1))
+    printf '  FAIL  %s\n' "$name"
+  fi
+}
+
+side_env() {
+  local side="$1"
+  shift
+  env PATH="$work/bin:$PATH" \
+    OMAKVM_CONFIG_DIR="$work/$side/config" \
+    OMAKVM_RUNTIME_DIR="$work/$side/run" \
+    OMAKVM_LAN_MOUSE_DIR="$work/$side/lan-mouse" \
+    FAKE_CLIP="$work/$side/clip" \
+    "$@"
+}
+
+# send <side> <port> [extra env...]: runs clip-send, leaving its log in $send_log.
+send_log="$work/send.log"
+send() {
+  local side="$1" to_port="$2"
+  shift 2
+  side_env "$side" OMAKVM_CLIP_PORT="$to_port" "$@" "$root/scripts/clip-send" </dev/null 2>"$send_log"
+}
+
+set_clip() {
+  local side="$1" types="$2" source="$3"
+  printf '%b' "$types" >"$work/$side/clip/types"
+  cp -- "$source" "$work/$side/clip/data"
+}
+
+sha() {
+  sha256sum <"$1" | cut -d' ' -f1
+}
+
+# The receiver answers before it places the clip, so wait for the fake wl-copy.
+wait_applied() {
+  local before="$1" i
+  for i in {1..50}; do
+    [[ -e $work/b/clip/applied && $(<"$work/b/clip/applied") != "$before" ]] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+applied_stamp() {
+  [[ -e $work/b/clip/applied ]] && cat "$work/b/clip/applied"
+}
+
+# receive <remote-addr> <request-file>: runs the handler directly, prints the status line.
+receive() {
+  side_env b REMOTE_ADDR="$1" "$root/scripts/clip-receive" <"$2" 2>>"$work/receive.log" | head -n 1 | tr -d '\r'
+}
+
+# Same, printing what follows the headers.
+receive_body() {
+  side_env b REMOTE_ADDR="$1" "$root/scripts/clip-receive" <"$2" 2>>"$work/receive.log" | tr -d '\r' | sed '1,/^$/d'
+}
+
+request() {
+  local mime="$1" length="$2" checksum="$3" body="$4"
+  printf 'POST /clip HTTP/1.1\r\nHost: test\r\nContent-Type: %s\r\nContent-Length: %s\r\nX-Omakvm-Sha256: %s\r\n\r\n' \
+    "$mime" "$length" "$checksum"
+  cat -- "$body"
+}
+
+systemd-socket-activate -l "127.0.0.1:$port" --accept --inetd \
+  -E PATH="$work/bin:$PATH" \
+  -E OMAKVM_CONFIG_DIR="$work/b/config" \
+  -E OMAKVM_RUNTIME_DIR="$work/b/run" \
+  -E FAKE_CLIP="$work/b/clip" \
+  -E REMOTE_ADDR=127.0.0.1 \
+  -E HOME -E XDG_RUNTIME_DIR \
+  "$root/scripts/clip-receive" >"$work/listener.log" 2>&1 &
+listener=$!
+
+ready=0
+for _ in {1..50}; do
+  if [[ $(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "http://127.0.0.1:$port/ping") == 204 ]]; then
+    ready=1
+    break
+  fi
+  sleep 0.1
+done
+check "listener answers /ping" test "$ready" = 1
+
+printf 'End to end\n'
+
+printf 'h\xc3\xa9llo w\xc3\xb6rld\nsecond line\n\ttabbed\n' >"$work/text"
+set_clip a 'text/plain;charset=utf-8\ntext/plain\nUTF8_STRING\n' "$work/text"
+before=$(applied_stamp)
+send a "$port"
+check "text is sent" grep -q 'sent text/plain' "$send_log"
+check "text reaches the other side" wait_applied "$before"
+check "text arrives byte for byte" cmp -s "$work/text" "$work/b/clip/data"
+check "text arrives as text" grep -qx 'text/plain;charset=utf-8' "$work/b/clip/types"
+
+# Zeros, 0xFF and CRLF inside the body would break any text-minded transport.
+{
+  printf '\x89PNG\r\n\x1a\n\x00\xff\xff\x00\r\n\r\n'
+  head -c 3000000 /dev/urandom
+} >"$work/image"
+set_clip a 'image/png\n' "$work/image"
+before=$(applied_stamp)
+send a "$port"
+check "image reaches the other side" wait_applied "$before"
+check "3 MB image arrives byte for byte" cmp -s "$work/image" "$work/b/clip/data"
+check "image arrives as image/png" grep -qx 'image/png' "$work/b/clip/types"
+
+printf 'Loop and duplicate prevention\n'
+
+# B now holds what it received. Its own watcher fires; it must stay silent.
+send b "$closed_port"
+check "a received clip is not sent back" test ! -s "$send_log"
+
+send a "$closed_port"
+check "an unchanged clipboard is not sent twice" test ! -s "$send_log"
+
+# A sends X, receives Y from B, then copies X again: X must go out again.
+set_clip a 'text/plain\n' "$work/text"
+before=$(applied_stamp)
+send a "$port"
+wait_applied "$before"
+side_env a bash -c 'source "$1/scripts/lib.sh"; mark_synced "$2"' _ "$root" "$(sha "$work/image")"
+before=$(applied_stamp)
+send a "$port"
+check "copying an earlier clip again sends it again" wait_applied "$before"
+
+printf 'Choice of content\n'
+
+printf 'cell text' >"$work/cell"
+set_clip a 'image/png\ntext/html\ntext/plain;charset=utf-8\n' "$work/cell"
+before=$(applied_stamp)
+send a "$port"
+wait_applied "$before"
+check "plain text wins over a picture of it" grep -qx 'text/plain;charset=utf-8' "$work/b/clip/types"
+
+head -c 2000 /dev/urandom >"$work/browser-image"
+set_clip a 'text/html\nimage/png\n' "$work/browser-image"
+before=$(applied_stamp)
+send a "$port"
+wait_applied "$before"
+check "an image without plain text is sent as an image" grep -qx 'image/png' "$work/b/clip/types"
+
+printf 'only html' >"$work/html"
+set_clip a 'text/html\n' "$work/html"
+send a "$port"
+check "content that is neither text nor PNG is left alone" test ! -s "$send_log"
+
+printf 'Things that must not leave\n'
+
+printf 'hunter2-%s' "$RANDOM" >"$work/secret"
+set_clip a 'text/plain\nx-kde-passwordManagerHint\n' "$work/secret"
+send a "$port"
+check "a password manager copy is not sent (hint type)" test ! -s "$send_log"
+
+set_clip a 'text/plain\n' "$work/secret"
+send a "$port" CLIPBOARD_STATE=sensitive
+check "a password manager copy is not sent (wl-paste state)" test ! -s "$send_log"
+check "the secret never reached the other side" bash -c '! cmp -s "$1" "$2"' _ "$work/secret" "$work/b/clip/data"
+
+printf 'new text %s' "$RANDOM" >"$work/paused"
+set_clip a 'text/plain\n' "$work/paused"
+touch "$work/a/run/clip-paused"
+send a "$port"
+check "nothing is sent while paused" test ! -s "$send_log"
+rm -f "$work/a/run/clip-paused"
+
+head -c 4096 /dev/urandom >"$work/big"
+set_clip a 'image/png\n' "$work/big"
+send a "$port" OMAKVM_CLIP_MAX_BYTES=1024
+check "a copy over the size limit is skipped" grep -q 'over the 1024 byte limit' "$send_log"
+
+printf 'Peer away\n'
+
+printf 'while away %s' "$RANDOM" >"$work/away"
+set_clip a 'text/plain\n' "$work/away"
+synced_before=$(cat "$work/a/run/clip-synced")
+started=$SECONDS
+send a "$closed_port"
+check "an unreachable peer is reported" grep -q 'did not take the clip' "$send_log"
+check "an unreachable peer does not hang the sender" test $((SECONDS - started)) -le 5
+check "an undelivered clip is not marked as synced" test "$(cat "$work/a/run/clip-synced")" = "$synced_before"
+before=$(applied_stamp)
+send a "$port"
+check "it is delivered once the peer is back" wait_applied "$before"
+
+printf 'What the receiver refuses\n'
+
+body="$work/text"
+good=$(sha "$body")
+length=$(stat -c %s "$body")
+stamp=$(applied_stamp)
+
+request 'text/plain;charset=utf-8' "$length" "$good" "$body" >"$work/req"
+check "a sender that is not a configured peer gets 403" test "$(receive 10.9.9.9 "$work/req")" = 'HTTP/1.1 403 Forbidden'
+check "no sender address at all gets 403" test "$(receive '' "$work/req")" = 'HTTP/1.1 403 Forbidden'
+
+request 'text/plain;charset=utf-8' "$length" "$(sha "$work/image")" "$body" >"$work/req"
+check "a wrong checksum gets 422" test "$(receive 127.0.0.1 "$work/req")" = 'HTTP/1.1 422 Unprocessable Content'
+
+request 'text/plain;charset=utf-8' "$((length + 50))" "$good" "$body" >"$work/req"
+check "a body shorter than announced gets 400" test "$(receive 127.0.0.1 "$work/req")" = 'HTTP/1.1 400 Bad Request'
+
+request 'application/x-sh' "$length" "$good" "$body" >"$work/req"
+check "an unexpected content type gets 415" test "$(receive 127.0.0.1 "$work/req")" = 'HTTP/1.1 415 Unsupported Media Type'
+
+request 'image/png' 99999999999 "$good" "$body" >"$work/req"
+check "an oversized announcement gets 413" test "$(receive 127.0.0.1 "$work/req")" = 'HTTP/1.1 413 Content Too Large'
+
+# "08" is not valid octal. Read as decimal 8, the request gets as far as the
+# checksum, which cannot match the first 8 bytes.
+request 'image/png' '08' "$good" "$body" >"$work/req"
+check "a length with a leading zero is read as decimal" test "$(receive 127.0.0.1 "$work/req")" = 'HTTP/1.1 422 Unprocessable Content'
+
+printf 'DELETE /clip HTTP/1.1\r\n\r\n' >"$work/req"
+check "any other request gets 404" test "$(receive 127.0.0.1 "$work/req")" = 'HTTP/1.1 404 Not Found'
+
+printf 'POST /clip HTTP/1.1\r\nContent-Type: image/png\r\n' >"$work/req"
+check "headers cut short get 400" test "$(receive 127.0.0.1 "$work/req")" = 'HTTP/1.1 400 Bad Request'
+
+touch "$work/b/run/clip-paused"
+request 'text/plain;charset=utf-8' "$length" "$good" "$body" >"$work/req"
+check "a paused receiver gets 503" test "$(receive 127.0.0.1 "$work/req")" = 'HTTP/1.1 503 Service Unavailable'
+rm -f "$work/b/run/clip-paused"
+
+check "none of the refused requests touched the clipboard" test "$(applied_stamp)" = "$stamp"
+
+printf 'Pairing\n'
+
+expected=$(openssl x509 -in "$work/b/lan-mouse/lan-mouse.pem" -noout -fingerprint -sha256 | sed 's/.*=//' | tr 'A-F' 'a-f')
+printf 'GET /fingerprint HTTP/1.1\r\nHost: test\r\n\r\n' >"$work/req"
+check "a peer is told this machine's fingerprint" test "$(receive_body 127.0.0.1 "$work/req")" = "$expected"
+check "the fingerprint has the form lan-mouse uses" grep -qE '^([0-9a-f]{2}:){31}[0-9a-f]{2}$' <<<"$expected"
+check "anyone else asking for it gets 403" test "$(receive 10.9.9.9 "$work/req")" = 'HTTP/1.1 403 Forbidden'
+
+printf 'GET /position HTTP/1.1\r\n\r\n' >"$work/req"
+check "no position yet gets 404" test "$(receive 127.0.0.1 "$work/req")" = 'HTTP/1.1 404 Not Found'
+printf 'right\n' >"$work/b/config/position"
+check "a peer is told which edge it is on" test "$(receive_body 127.0.0.1 "$work/req")" = 'right'
+printf 'sideways\n' >"$work/b/config/position"
+check "a position that is not an edge is not passed on" test "$(receive 127.0.0.1 "$work/req")" = 'HTTP/1.1 404 Not Found'
+
+printf 'POST /hello HTTP/1.1\r\nContent-Length: 0\r\n\r\n' >"$work/req"
+check "a hello from the peer is accepted" test "$(receive 127.0.0.1 "$work/req")" = 'HTTP/1.1 204 No Content'
+check "and starts pairing on this side" grep -q -- "--user --collect --quiet $root/scripts/omakvm pair" "$work/b/clip/systemd-run.calls"
+rm -f "$work/b/clip/systemd-run.calls"
+check "a hello from anyone else gets 403" test "$(receive 10.9.9.9 "$work/req")" = 'HTTP/1.1 403 Forbidden'
+check "and starts nothing" test ! -e "$work/b/clip/systemd-run.calls"
+check "no payload is left behind in the runtime directories" bash -c '! compgen -G "$1/*/run/clip-in.*" >/dev/null && ! compgen -G "$1/*/run/clip-out.*" >/dev/null' _ "$work"
+
+printf '\n%d passed, %d failed\n' "$passed" "$failed"
+((failed == 0))

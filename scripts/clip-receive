@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# Take one clip from a peer and place it on this machine's clipboard.
+#
+# Started by systemd for each incoming connection (Accept=yes), with the TCP
+# connection on stdin and stdout and the sender's address in REMOTE_ADDR. The
+# exchange is a single HTTP request, which lets curl be the sending side:
+#
+#   POST /clip          Content-Type, Content-Length, X-Omakvm-Sha256, then the bytes
+#   GET  /ping          reachability check for the bar widget
+#   GET  /fingerprint   this machine's lan-mouse fingerprint, for pairing
+#   GET  /position      the screen edge this machine has its peer on
+#   POST /hello         the peer just trusted us; fetch its fingerprint in turn
+#
+# The last three are what lets two machines pair without anyone copying a
+# fingerprint by hand: each side asks the other for it over this connection.
+#
+# The connection is plain TCP. It is meant to run between Tailscale addresses,
+# where WireGuard encrypts it and vouches for the sender's address.
+
+set -uo pipefail
+
+here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+source "$here/lib.sh"
+
+remote="${REMOTE_ADDR:-}"
+remote="${remote#::ffff:}"
+
+# respond <status> [body]: every body sent from here is short ASCII, so its
+# length in characters is its length in bytes.
+respond() {
+  local body="${2-}"
+  printf 'HTTP/1.1 %s\r\nContent-Type: text/plain\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' \
+    "$1" "${#body}" "$body"
+}
+
+# A refusal is an outcome this script handled, not a failure of the service,
+# so it exits 0 and leaves the reason in the journal.
+refuse() {
+  respond "$1"
+  log "clip-receive: refused ${remote:-an unknown sender}: ${2:-$1}"
+  exit 0
+}
+
+# Only a configured peer gets past this line; nothing it sent has been read.
+peer_allowed "$remote" || refuse '403 Forbidden' 'not a configured peer'
+
+line=
+read_line() {
+  line=
+  IFS= read -r -t 5 -n 2048 line || return 1
+  ((${#line} < 2048)) || return 1
+  line="${line%$'\r'}"
+}
+
+read_line || refuse '400 Bad Request' 'no request line'
+case "$line" in
+'GET /ping HTTP/1.'[01]) request=ping ;;
+'GET /fingerprint HTTP/1.'[01]) request=fingerprint ;;
+'GET /position HTTP/1.'[01]) request=position ;;
+'POST /hello HTTP/1.'[01]) request=hello ;;
+'POST /clip HTTP/1.'[01]) request=clip ;;
+*) refuse '404 Not Found' 'unexpected request' ;;
+esac
+
+size= mime= sha=
+headers=0 complete=0
+while read_line; do
+  if [[ -z $line ]]; then
+    complete=1
+    break
+  fi
+  ((++headers <= 32)) || refuse '431 Request Header Fields Too Large'
+
+  name="${line%%:*}"
+  value="${line#*:}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  case "${name,,}" in
+  content-length) size="$value" ;;
+  content-type) mime="$value" ;;
+  x-omakvm-sha256) sha="$value" ;;
+  esac
+done
+((complete)) || refuse '400 Bad Request' 'incomplete headers'
+
+case "$request" in
+ping)
+  respond '204 No Content'
+  exit 0
+  ;;
+fingerprint)
+  if answer=$(own_fingerprint); then
+    respond '200 OK' "$answer"
+  else
+    respond '404 Not Found'
+  fi
+  exit 0
+  ;;
+position)
+  if answer=$(stored_position); then
+    respond '200 OK' "$answer"
+  else
+    respond '404 Not Found'
+  fi
+  exit 0
+  ;;
+hello)
+  respond '204 No Content'
+  # Pairing outlives this connection, so it runs as a unit of its own rather
+  # than as a child that goes when this one does.
+  systemd-run --user --collect --quiet "$here/omakvm" pair >/dev/null 2>&1 ||
+    log "clip-receive: could not start pairing after hello from $remote"
+  exit 0
+  ;;
+esac
+
+[[ -e $PAUSE_FILE ]] && refuse '503 Service Unavailable' 'syncing is paused'
+
+case "$mime" in
+"$MIME_TEXT" | "$MIME_PNG") ;;
+*) refuse '415 Unsupported Media Type' "type $(printable "$mime")" ;;
+esac
+
+[[ $size =~ ^[0-9]{1,12}$ ]] || refuse '411 Length Required'
+size=$((10#$size))
+((size > 0)) || refuse '400 Bad Request' 'empty clip'
+((size <= OMAKVM_CLIP_MAX_BYTES)) || refuse '413 Content Too Large' "$size bytes"
+[[ $sha =~ ^[0-9a-f]{64}$ ]] || refuse '400 Bad Request' 'missing checksum'
+
+ensure_runtime_dir || refuse '500 Internal Server Error' 'runtime directory is not usable'
+payload=$(mktemp -- "$OMAKVM_RUNTIME_DIR/clip-in.XXXXXX") || refuse '500 Internal Server Error'
+trap 'rm -f -- "$payload"' EXIT
+
+timeout 60s head -c "$size" >"$payload"
+[[ $(stat -c %s -- "$payload") == "$size" ]] || refuse '400 Bad Request' 'body shorter than announced'
+[[ $(sha256_file "$payload") == "$sha" ]] || refuse '422 Unprocessable Content' 'checksum mismatch'
+
+# Recorded before the clip reaches the clipboard: the local watcher fires as
+# soon as it lands, and must already find it marked as in sync.
+mark_synced "$sha" || refuse '500 Internal Server Error' 'could not record the clip'
+record_transfer in "$mime" "$size" "$remote"
+
+respond '204 No Content'
+log "clip-receive: received $mime ($size bytes) from $remote"
+
+# wl-copy serves the clip for as long as it owns the clipboard, so it becomes
+# this process: the unit lives until the next copy replaces it. Every
+# descriptor still pointing at the connection is released first.
+trap - EXIT
+exec 0<"$payload" 1>/dev/null 3<&-
+rm -f -- "$payload"
+exec wl-copy --foreground --type "$mime"

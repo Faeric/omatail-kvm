@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Watch the clipboard and hand every change to clip-send.
+#
+# Two watchers, as Omarchy's own clipboard history runs them: wl-paste only
+# reports a change when the copy offers the type it was asked to watch, so a
+# single untyped watcher never fires for a screenshot or any other image-only
+# copy. A copy that offers both text and an image fires both; clip-send
+# serializes them and the second finds the clip already sent.
+#
+# Starting a watcher also runs clip-send once for the clipboard as it stands,
+# which is what brings a peer up to date when syncing is switched on.
+
+set -uo pipefail
+
+here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+
+watchers=()
+stop() {
+  kill "${watchers[@]}" 2>/dev/null
+}
+trap stop EXIT
+trap 'exit 0' TERM INT
+
+wl-paste --type text --watch "$here/clip-send" &
+watchers+=($!)
+wl-paste --type image/png --watch "$here/clip-send" &
+watchers+=($!)
+
+# If either watcher goes, leave with the other so the service restarts both.
+wait -n
+exit 1

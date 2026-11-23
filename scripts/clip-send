@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Push the current clipboard to every peer.
+#
+# Run by `wl-paste --watch` on each clipboard change. It is safe to run by
+# hand as well: with nothing new to send it does nothing.
+
+set -uo pipefail
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib.sh"
+
+# wl-paste hands over the copy on stdin in a type it picked itself. We choose
+# the type below and read it again, so that pipe is only drained: left unread,
+# a large copy would block the application that owns it.
+exec 8<&0 0</dev/null
+timeout 2s cat <&8 >/dev/null 2>&1 &
+exec 8<&-
+
+# wl-paste marks copies a password manager flagged as secret, and tells an
+# emptied clipboard apart from a real copy. Neither is ever sent.
+case "${CLIPBOARD_STATE:-data}" in
+sensitive | nil | clear) exit 0 ;;
+esac
+
+[[ -e $PAUSE_FILE ]] && exit 0
+
+mapfile -t peers < <(peer_addresses)
+((${#peers[@]})) || exit 0
+
+ensure_runtime_dir || {
+  log "clip-send: runtime directory $OMAKVM_RUNTIME_DIR is not usable"
+  exit 1
+}
+
+# One send at a time, so two quick copies arrive in the order they were made.
+exec 9>"$OMAKVM_RUNTIME_DIR/clip-send.lock"
+flock -w 30 9 || exit 0
+
+types=$(timeout 2s wl-paste --list-types 2>/dev/null) || exit 0
+grep -qx 'x-kde-passwordManagerHint' <<<"$types" && exit 0
+
+# Plain text wins when it is offered: a spreadsheet offers a picture of the
+# cells next to their text, and the text is what a paste expects. An image is
+# sent only when there is no plain text, as with a screenshot or an image
+# copied from a browser.
+if grep -qxE 'text/plain(;.*)?|UTF8_STRING|STRING|TEXT' <<<"$types"; then
+  mime="$MIME_TEXT"
+  reader=(wl-paste --type text --no-newline)
+elif grep -qx "$MIME_PNG" <<<"$types"; then
+  mime="$MIME_PNG"
+  reader=(wl-paste --type "$MIME_PNG")
+else
+  exit 0
+fi
+
+payload=$(mktemp -- "$OMAKVM_RUNTIME_DIR/clip-out.XXXXXX") || exit 1
+trap 'rm -f -- "$payload"' EXIT
+
+# The owner streams the copy and can stall, so the read is bounded; a copy cut
+# off at the deadline is dropped rather than sent truncated.
+timeout 10s "${reader[@]}" >"$payload" 2>/dev/null || exit 0
+
+size=$(stat -c %s -- "$payload") || exit 1
+((size > 0)) || exit 0
+if ((size > OMAKVM_CLIP_MAX_BYTES)); then
+  log "clip-send: skipped a $size byte copy, over the $OMAKVM_CLIP_MAX_BYTES byte limit"
+  exit 0
+fi
+
+sha=$(sha256_file "$payload") || exit 1
+[[ $sha == "$(synced_sha)" ]] && exit 0
+
+push() {
+  curl --silent --show-error --fail --noproxy '*' \
+    --connect-timeout 3 --max-time 60 \
+    -H 'Expect:' -H "Content-Type: $mime" -H "X-Omakvm-Sha256: $sha" \
+    --data-binary "@$payload" --output /dev/null \
+    "http://$1:$OMAKVM_CLIP_PORT/clip"
+}
+
+delivered=0
+for peer in "${peers[@]}"; do
+  if error=$(push "$peer" 2>&1); then
+    delivered=1
+    record_transfer out "$mime" "$size" "$peer"
+    log "clip-send: sent $mime ($size bytes) to $peer"
+  else
+    log "clip-send: $peer did not take the clip: $(printable "$error")"
+  fi
+done
+
+# Recorded only once a peer confirmed it, so a copy made while every peer was
+# away is sent the next time it is copied.
+((delivered)) && mark_synced "$sha"
+
+exit 0

@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.faeric.omakvm",
+  "name": "Omakvm",
+  "version": "0.1.0",
+  "author": "Faeric",
+  "license": "MIT",
+  "description": "Share one keyboard, mouse and clipboard between two Omarchy machines on the same Tailscale network.",
+  "keywords": [
+    "kvm",
+    "keyboard",
+    "mouse",
+    "clipboard",
+    "sharing",
+    "lan-mouse",
+    "tailscale",
+    "omarchy"
+  ],
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omakvm",
+    "description": "Push the pointer off the edge of one screen and carry on typing on the other machine. Choose the machine and the edge it sits on; installing and pairing follow.",
+    "category": "System",
+    "aliases": [
+      "kvm",
+      "lan-mouse",
+      "clipboard"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 30
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "description": "How often the state is checked while the panel is closed.",
+        "min": 5,
+        "max": 3600,
+        "step": 5,
+        "defaultValue": 30
+      }
+    ]
+  }
+}
