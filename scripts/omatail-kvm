@@ -65,8 +65,8 @@ tailscale_name() {
     head -n 1
 }
 
-# Fingerprints already authorized, as config lines, so choosing a peer again
-# does not undo a pairing.
+# Fingerprints already authorized, as config lines, so choosing the same peer
+# again does not undo a pairing.
 authorized_lines() {
   [[ -r $LAN_MOUSE_CONFIG ]] || return 0
   sed -n '/^\[authorized_fingerprints\]/,/^\[/p' "$LAN_MOUSE_CONFIG" |
@@ -76,8 +76,8 @@ authorized_lines() {
 # lan-mouse's config is written whole: one peer, on one edge, entered as soon
 # as the daemon starts. Every value placed in it was validated first.
 write_lan_mouse_config() {
-  local address="$1" position="$2" kept tmp
-  kept=$(authorized_lines)
+  local address="$1" position="$2" keep="$3" kept= tmp
+  [[ $keep == keep ]] && kept=$(authorized_lines)
   mkdir -p -- "$LAN_MOUSE_DIR" || return 1
 
   # Whatever was there before the first run is kept aside, once.
@@ -98,7 +98,7 @@ write_lan_mouse_config() {
 }
 
 configure() {
-  local address="${1:-}" position="${2:-}" name answer
+  local address="${1:-}" position="${2:-}" name answer previous keep=drop
 
   tailscale_ipv4 "$address" || die "$(printable "$address") is not a Tailscale IPv4 address"
 
@@ -111,6 +111,12 @@ configure() {
       die "no screen edge given and $name does not have one for this machine yet; give left, right, top or bottom"
   fi
   valid_position "$position" || die "$(printable "$position") is not left, right, top or bottom"
+
+  # Only the machine chosen now may send input here. Choosing a different one
+  # withdraws the trust given to the one before it; the same one keeps its
+  # pairing.
+  previous=$(peer_addresses | head -n 1)
+  [[ $previous == "$address" ]] && keep=keep
 
   mkdir -p -- "$OMATAIL_KVM_CONFIG_DIR" || die "cannot create $OMATAIL_KVM_CONFIG_DIR"
   write_state "$PEERS_FILE" "$address $name" || die 'could not save the peer'
@@ -125,7 +131,7 @@ configure() {
 
   # The daemon rewrites its config as it runs, so it is stopped around the edit.
   systemctl --user stop "$KVM_UNIT" 2>/dev/null
-  write_lan_mouse_config "$address" "$position" || die 'could not write the lan-mouse configuration'
+  write_lan_mouse_config "$address" "$position" "$keep" || die 'could not write the lan-mouse configuration'
 
   "$here/clip-service" install >/dev/null || die 'could not install the clipboard relay'
   "$here/kvm-service" install || die 'could not install the keyboard and mouse service'
@@ -147,7 +153,7 @@ wait_for_daemon() {
 # Returns 0 when the peer is trusted here, 3 when it would not say who it is,
 # which is the ordinary case while it has not chosen this machine yet.
 pair() {
-  local fingerprint stale changed=0
+  local fingerprint stale=() old changed=0
 
   load_peer || die 'no peer is configured; run: omatail-kvm configure <address> <position>'
 
@@ -157,21 +163,27 @@ pair() {
   }
   valid_fingerprint "$fingerprint" || die "$peer_name answered with something that is not a fingerprint"
 
-  if ! grep -qF "\"$fingerprint\"" "$LAN_MOUSE_CONFIG" 2>/dev/null; then
+  # The peer's certificate is the only one trusted: any other fingerprint,
+  # left by a machine chosen earlier or by a certificate the peer has since
+  # replaced, is withdrawn.
+  mapfile -t stale < <(authorized_lines | sed -n 's/^"\([0-9a-f:]*\)" = .*/\1/p' | grep -vxF "$fingerprint")
+
+  if ((${#stale[@]})) || ! grep -qF "\"$fingerprint\"" "$LAN_MOUSE_CONFIG" 2>/dev/null; then
     systemctl --user is-active --quiet "$KVM_UNIT" || systemctl --user start "$KVM_UNIT"
     wait_for_daemon || die 'the lan-mouse daemon is not answering'
 
-    # A peer that was reinstalled has a new certificate; its old fingerprint
-    # stops being trusted when the new one is.
-    while read -r stale; do
-      [[ -n $stale ]] && timeout 5s lan-mouse cli remove-authorized-key "$stale" >/dev/null 2>&1
-    done < <(authorized_lines | sed -n "s/^\"\\([0-9a-f:]*\\)\" = \"$peer_name\"\$/\\1/p")
+    for old in "${stale[@]}"; do
+      timeout 5s lan-mouse cli remove-authorized-key "$old" >/dev/null 2>&1 ||
+        die 'could not withdraw an earlier pairing'
+    done
 
-    timeout 5s lan-mouse cli authorize-key "$peer_name" "$fingerprint" >/dev/null 2>&1 ||
-      die "could not authorize $peer_name"
+    if ! grep -qF "\"$fingerprint\"" "$LAN_MOUSE_CONFIG" 2>/dev/null; then
+      timeout 5s lan-mouse cli authorize-key "$peer_name" "$fingerprint" >/dev/null 2>&1 ||
+        die "could not authorize $peer_name"
+      changed=1
+      printf 'Paired with %s.\n' "$peer_name"
+    fi
     timeout 5s lan-mouse cli save-config >/dev/null 2>&1
-    changed=1
-    printf 'Paired with %s.\n' "$peer_name"
   fi
 
   # Told only when something changed here, so two machines greeting each other
@@ -190,7 +202,7 @@ unit_state() {
 # Whether ufw lets the peer reach both ports. Its rules file is readable
 # without root on Omarchy; when it is not, the answer is "unknown", not a guess.
 firewall_state() {
-  local address="$1" rules=/etc/ufw/user.rules
+  local address="$1" rules="$UFW_RULES_FILE"
   command -v ufw >/dev/null 2>&1 || {
     printf none
     return
@@ -201,7 +213,12 @@ firewall_state() {
   }
   if grep -qE "^### tuple ### allow udp $LAN_MOUSE_PORT [^ ]+ any $address " "$rules" &&
     grep -qE "^### tuple ### allow tcp $OMATAIL_KVM_CLIP_PORT [^ ]+ any $address " "$rules"; then
-    printf open
+    # Open to the peer, but a machine chosen earlier is still let in.
+    if [[ -n $(stale_firewall_rules "$address") ]]; then
+      printf stale
+    else
+      printf open
+    fi
   else
     printf closed
   fi

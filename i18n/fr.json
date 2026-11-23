@@ -26,6 +26,7 @@
   "row.install.ok": "lan-mouse est installé et le pare-feu laisse entrer l'autre poste",
   "row.install.missing": "lan-mouse n'est pas installé",
   "row.install.firewall": "Le pare-feu ne laisse pas entrer l'autre poste",
+  "row.install.stale": "Le pare-feu laisse encore entrer un poste choisi auparavant",
   "row.install.unknown": "lan-mouse est installé ; le pare-feu n'a pas pu être lu",
   "row.install.action": "Installer et ouvrir le pare-feu (demande votre mot de passe)",
   "row.link": "Liaison",

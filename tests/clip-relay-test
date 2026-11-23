@@ -81,12 +81,20 @@ side_env() {
     "$@"
 }
 
-# send <side> <port> [extra env...]: runs clip-send, leaving its log in $send_log.
+# send <side> <port> [extra env...]: runs clip-send the way the two typed
+# watchers do, once for each type the fake clipboard offers, with the copy on
+# stdin. Leaves the log in $send_log.
 send_log="$work/send.log"
 send() {
-  local side="$1" to_port="$2"
+  local side="$1" to_port="$2" clip="$work/$1/clip"
   shift 2
-  side_env "$side" OMATAIL_KVM_CLIP_PORT="$to_port" "$@" "$root/scripts/clip-send" </dev/null 2>"$send_log"
+  : >"$send_log"
+  if grep -qxE 'text/plain(;.*)?|UTF8_STRING|STRING|TEXT' "$clip/types"; then
+    side_env "$side" OMATAIL_KVM_CLIP_PORT="$to_port" "$@" "$root/scripts/clip-send" text <"$clip/data" 2>>"$send_log"
+  fi
+  if grep -qx 'image/png' "$clip/types"; then
+    side_env "$side" OMATAIL_KVM_CLIP_PORT="$to_port" "$@" "$root/scripts/clip-send" image/png <"$clip/data" 2>>"$send_log"
+  fi
 }
 
 set_clip() {
@@ -230,6 +238,33 @@ set_clip a 'text/plain\n' "$work/paused"
 touch "$work/a/run/clip-paused"
 send a "$port"
 check "nothing is sent while paused" test ! -s "$send_log"
+rm -f "$work/a/run/clip-paused"
+
+# The copy handed over by the watcher is what is sent, even when the
+# selection has since been replaced by a secret one.
+printf 'ordinary %s' "$RANDOM" >"$work/ordinary"
+set_clip a 'text/plain\n' "$work/secret"
+before=$(applied_stamp)
+side_env a OMATAIL_KVM_CLIP_PORT="$port" "$root/scripts/clip-send" text <"$work/ordinary" 2>"$send_log"
+check "the watched copy is delivered" wait_applied "$before"
+check "the selection that replaced it is not what was sent" cmp -s "$work/ordinary" "$work/b/clip/data"
+
+# A copy admitted before Pause and held up behind another send must not go
+# out once syncing is paused.
+printf 'held back %s' "$RANDOM" >"$work/held"
+set_clip a 'text/plain\n' "$work/held"
+before=$(applied_stamp)
+(
+  flock 9
+  sleep 1
+  touch "$work/a/run/clip-paused"
+) 9>"$work/a/run/clip-send.lock" &
+holder=$!
+sleep 0.3
+send a "$port"
+wait "$holder"
+check "a copy waiting its turn is dropped when syncing is paused" test ! -s "$send_log"
+check "and it never reached the other side" bash -c '! cmp -s "$1" "$2"' _ "$work/held" "$work/b/clip/data"
 rm -f "$work/a/run/clip-paused"
 
 head -c 4096 /dev/urandom >"$work/big"

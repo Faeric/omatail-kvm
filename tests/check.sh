@@ -66,4 +66,9 @@ tests/clip-relay-test >/dev/null || {
   exit 1
 }
 
+tests/pair-test >/dev/null || {
+  printf 'tests/pair-test failed; run it on its own to see which check\n' >&2
+  exit 1
+}
+
 printf 'All Omatail KVM checks passed.\n'

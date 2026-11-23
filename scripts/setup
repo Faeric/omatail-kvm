@@ -45,7 +45,16 @@ printf 'Omatail KVM setup\n=================\n\n'
 printf 'This will run, as root:\n\n'
 printf '  pacman -S --needed --noconfirm lan-mouse\n'
 printf '  ufw allow in on %s from %s to any port %s proto udp\n' "$device" "$peer" "$LAN_MOUSE_PORT"
-printf '  ufw allow in on %s from %s to any port %s proto tcp\n\n' "$device" "$peer" "$OMATAIL_KVM_CLIP_PORT"
+printf '  ufw allow in on %s from %s to any port %s proto tcp\n' "$device" "$peer" "$OMATAIL_KVM_CLIP_PORT"
+# Rules this plugin added for a machine chosen earlier are withdrawn: only the
+# machine chosen now is let in.
+mapfile -t stale < <(stale_firewall_rules "$peer")
+for rule in "${stale[@]}"; do
+  read -r old_peer old_device old_proto old_port <<<"$rule"
+  printf '  ufw delete allow in on %s from %s to any port %s proto %s\n' "$old_device" "$old_peer" "$old_port" "$old_proto"
+done
+((${#stale[@]})) && printf '\nThe "ufw delete" lines close the firewall to a machine chosen earlier.\n'
+printf '\n'
 printf 'Both steps are safe to repeat: pacman skips an installed package and ufw\n'
 printf 'skips a rule it already has.\n\n'
 
@@ -70,6 +79,10 @@ if command -v ufw >/dev/null 2>&1; then
   printf '==> Opening the firewall to %s\n' "$peer"
   sudo ufw allow in on "$device" from "$peer" to any port "$LAN_MOUSE_PORT" proto udp comment 'Omatail KVM: keyboard and mouse' || status=1
   sudo ufw allow in on "$device" from "$peer" to any port "$OMATAIL_KVM_CLIP_PORT" proto tcp comment 'Omatail KVM: clipboard' || status=1
+  for rule in "${stale[@]}"; do
+    read -r old_peer old_device old_proto old_port <<<"$rule"
+    sudo ufw delete allow in on "$old_device" from "$old_peer" to any port "$old_port" proto "$old_proto" || status=1
+  done
 else
   printf '==> ufw is not installed, so there is no firewall rule to add.\n'
 fi

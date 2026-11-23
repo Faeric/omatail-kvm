@@ -179,3 +179,22 @@ printable() {
   local value="${1:0:80}"
   printf '%s' "${value//[^[:print:]]/?}"
 }
+
+# ufw rules this plugin added for a machine other than <address>, one
+# "<address> <interface> <protocol> <port>" per line. They are recognised by
+# the comment setup gives them (and the one it gave under the plugin's former
+# name), so a rule the user wrote for the same ports is never touched.
+UFW_RULES_FILE="${OMATAIL_KVM_UFW_RULES:-/etc/ufw/user.rules}"
+stale_firewall_rules() {
+  local keep="$1" proto port source device comment ours legacy
+  [[ -r $UFW_RULES_FILE ]] || return 0
+  ours=$(printf 'Omatail KVM:' | od -An -tx1 | tr -d ' \n')
+  legacy=$(printf 'Omakvm:' | od -An -tx1 | tr -d ' \n')
+  while read -r proto port source device comment; do
+    [[ $comment == "comment=$ours"* || $comment == "comment=$legacy"* ]] || continue
+    [[ $proto == udp && $port == "$LAN_MOUSE_PORT" || $proto == tcp && $port == "$OMATAIL_KVM_CLIP_PORT" ]] || continue
+    [[ $source != "$keep" ]] && tailscale_ipv4 "$source" || continue
+    [[ $device =~ ^in_(tailscale[a-z0-9]*)$ ]] || continue
+    printf '%s %s %s %s\n' "$source" "${BASH_REMATCH[1]}" "$proto" "$port"
+  done < <(awk '$1 == "###" && $2 == "tuple" && $4 == "allow" { print $5, $6, $9, $10, $11 }' "$UFW_RULES_FILE")
+}

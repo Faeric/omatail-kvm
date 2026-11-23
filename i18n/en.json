@@ -26,6 +26,7 @@
   "row.install.ok": "lan-mouse is installed and the firewall lets the other machine in",
   "row.install.missing": "lan-mouse is not installed",
   "row.install.firewall": "The firewall does not let the other machine in",
+  "row.install.stale": "The firewall still lets in a machine chosen earlier",
   "row.install.unknown": "lan-mouse is installed; the firewall could not be read",
   "row.install.action": "Install and open the firewall (asks for your password)",
   "row.link": "Connection",

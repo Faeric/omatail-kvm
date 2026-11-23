@@ -4,8 +4,9 @@
 # Two watchers, as Omarchy's own clipboard history runs them: wl-paste only
 # reports a change when the copy offers the type it was asked to watch, so a
 # single untyped watcher never fires for a screenshot or any other image-only
-# copy. A copy that offers both text and an image fires both; clip-send
-# serializes them and the second finds the clip already sent.
+# copy. Each watcher tells clip-send which type it was handed. A copy that
+# offers both text and an image fires both; clip-send sends the text and
+# stays silent for the image.
 #
 # Starting a watcher also runs clip-send once for the clipboard as it stands,
 # which is what brings a peer up to date when syncing is switched on.
@@ -21,9 +22,9 @@ stop() {
 trap stop EXIT
 trap 'exit 0' TERM INT
 
-wl-paste --type text --watch "$here/clip-send" &
+wl-paste --type text --watch "$here/clip-send" text &
 watchers+=($!)
-wl-paste --type image/png --watch "$here/clip-send" &
+wl-paste --type image/png --watch "$here/clip-send" image/png &
 watchers+=($!)
 
 # If either watcher goes, leave with the other so the service restarts both.

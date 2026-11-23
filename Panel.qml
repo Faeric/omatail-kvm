@@ -81,7 +81,7 @@ Panel {
   readonly property bool busy: busyAction !== ""
   readonly property bool configured: peerAddress !== ""
   readonly property bool installOk: installed && (firewall === "open" || firewall === "none")
-  readonly property bool needsSetup: configured && (!installed || firewall === "closed")
+  readonly property bool needsSetup: configured && (!installed || firewall === "closed" || firewall === "stale")
   readonly property bool sharing: configured && kvmActive
 
   readonly property string selectedAddress: pendingAddress !== "" ? pendingAddress : peerAddress
@@ -224,7 +224,7 @@ Panel {
     root.peerAddress = address
     root.peerName = address !== "" ? (plain(peer.name) || address) : ""
     root.peerPosition = address !== "" && validPosition(peer.position) ? peer.position : ""
-    root.firewall = ["open", "closed", "none"].indexOf(data.firewall) >= 0 ? data.firewall : "unknown"
+    root.firewall = ["open", "closed", "stale", "none"].indexOf(data.firewall) >= 0 ? data.firewall : "unknown"
     root.reachable = data.reachable === true
     root.paired = data.paired === true
     root.kvmActive = data.kvm === "active"
@@ -699,6 +699,7 @@ Panel {
               verdict: root.installOk ? "ok" : (root.needsSetup ? "warn" : "unknown")
               detail: !root.installed ? strings.t("row.install.missing")
                 : (root.firewall === "closed" ? strings.t("row.install.firewall")
+                  : root.firewall === "stale" ? strings.t("row.install.stale")
                   : (root.installOk ? strings.t("row.install.ok") : strings.t("row.install.unknown")))
               actionIcon: root.iconInstall
               actionTooltip: strings.t("row.install.action")

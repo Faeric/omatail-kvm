@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# Checks that only the machine chosen now stays trusted for keyboard and mouse.
+#
+# Stand-ins replace lan-mouse, systemctl and curl, and the configuration lives
+# in a temporary folder: nothing on the machine is read or changed.
+
+set -uo pipefail
+
+root=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
+work=$(mktemp -d) || exit 1
+trap 'rm -rf -- "$work"' EXIT
+
+mkdir -p "$work"/{bin,config,run,lan-mouse}
+chmod 700 "$work/run"
+
+peer_fp=$(printf 'aa:%.0s' {1..31})aa
+old_fp=$(printf 'bb:%.0s' {1..31})bb
+config="$work/lan-mouse/config.toml"
+
+# lan-mouse: applies authorize and remove to the config file, as the daemon
+# does once it is asked to save.
+cat >"$work/bin/lan-mouse" <<'EOF'
+#!/usr/bin/env bash
+config="$OMATAIL_KVM_LAN_MOUSE_DIR/config.toml"
+[[ ${1:-} == cli ]] || exit 0
+case "${2:-}" in
+authorize-key) printf '"%s" = "%s"\n' "$4" "$3" >>"$config" ;;
+remove-authorized-key) grep -vF "\"$3\"" "$config" >"$config.new"; mv "$config.new" "$config" ;;
+esac
+EOF
+printf '#!/usr/bin/env bash\nexit 0\n' >"$work/bin/systemctl"
+# curl: the peer answers /fingerprint with its own; anything else succeeds.
+cat >"$work/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+[[ "$*" == */fingerprint ]] && printf '%s' "$FAKE_PEER_FINGERPRINT"
+exit 0
+EOF
+chmod +x "$work"/bin/*
+
+run() {
+  env PATH="$work/bin:$PATH" \
+    OMATAIL_KVM_CONFIG_DIR="$work/config" \
+    OMATAIL_KVM_RUNTIME_DIR="$work/run" \
+    OMATAIL_KVM_LAN_MOUSE_DIR="$work/lan-mouse" \
+    FAKE_PEER_FINGERPRINT="$peer_fp" \
+    "$root/scripts/omatail-kvm" "$@"
+}
+
+passed=0 failed=0
+check() {
+  local name="$1"
+  shift
+  if "$@"; then
+    passed=$((passed + 1))
+    printf '  ok    %s\n' "$name"
+  else
+    failed=$((failed + 1))
+    printf '  FAIL  %s\n' "$name"
+  fi
+}
+
+write_config() {
+  printf 'capture_backend = "layer-shell"\n\n[authorized_fingerprints]\n' >"$config"
+  printf '%s\n' "$@" >>"$config"
+}
+
+printf '100.64.0.2 newpeer\n' >"$work/config/peers"
+
+printf 'Pairing\n'
+
+write_config "\"$old_fp\" = \"oldpeer\""
+run pair >/dev/null
+check "the chosen machine is trusted" grep -qF "\"$peer_fp\" = \"newpeer\"" "$config"
+check "a machine chosen earlier, under another name, is no longer trusted" bash -c '! grep -qF "$1" "$2"' _ "$old_fp" "$config"
+
+write_config "\"$peer_fp\" = \"newpeer\"" "\"$old_fp\" = \"oldpeer\""
+run pair >/dev/null
+check "an earlier machine is withdrawn even when the chosen one is already paired" bash -c '! grep -qF "$1" "$2"' _ "$old_fp" "$config"
+check "and the chosen machine stays trusted" grep -qF "\"$peer_fp\" = \"newpeer\"" "$config"
+
+before=$(sha256sum <"$config")
+run pair >/dev/null
+check "pairing again changes nothing" test "$(sha256sum <"$config")" = "$before"
+
+printf '\n%d passed, %d failed\n' "$passed" "$failed"
+((failed == 0))

@@ -57,6 +57,9 @@ ufw allow in on tailscale0 from <other machine> to any port 4242 proto udp
 ufw allow in on tailscale0 from <other machine> to any port 4244 proto tcp
 ```
 
+If you had chosen a different machine before, it also lists the `ufw delete`
+commands that close the firewall to that earlier machine.
+
 On the first machine it says `Waiting for <other machine>: it has not chosen
 this machine as its peer yet.` before `Setup is complete.` That is expected:
 nothing more is needed there. Close the terminal and go to the second machine.
@@ -107,6 +110,10 @@ Everything outside the plugin's own folder is listed here.
   that was already there is kept once as `config.toml.before-omatail-kvm`.
 - **`~/.config/omatail-kvm`:** the chosen machine and edge.
 
+Choosing a different machine later withdraws what the earlier one was given:
+its Lan Mouse pairing is removed at once, and the panel asks for the password
+step again to delete its two firewall rules.
+
 ## Limits
 
 - Two machines, on Tailscale. A machine on the same LAN but outside the
@@ -126,13 +133,19 @@ Everything outside the plugin's own folder is listed here.
 - The clipboard relay does not encrypt on its own. It is meant to run inside
   Tailscale, where WireGuard encrypts the connection and vouches for the
   sender's address, and Omatail KVM refuses any other kind of address.
+- Only one machine is trusted at a time. When you choose another, the
+  earlier machine's certificate stops being accepted for keyboard and mouse
+  straight away, and its firewall rules are removed by the password step.
+- The clipboard relay sends exactly the copy the clipboard reported, never a
+  later one, and nothing leaves once syncing is paused.
 - The relay answers only the machine you chose; anything else gets `403`. The
   firewall rules admit that one address as well.
 - Copies a password manager marks as secret are never sent.
 - Pairing trusts Tailscale: a machine is given this one's Lan Mouse
   fingerprint, and trusted in return, only if you chose it here. Anyone who
   can use that machine's Tailscale address can therefore pair with yours.
-- The only privileged commands are the three shown above, run in a visible
+- The only privileged commands are the three shown above, plus the removal of
+  an earlier machine's two firewall rules, run in a visible
   terminal after you type your password. The address they use is validated
   and passed as an argument, never as shell text.
 
@@ -179,6 +192,9 @@ omarchy plugin validate .
 `tests/fresh-start` puts a machine back to how it was before Omatail KVM, to
 rehearse a first install; it asks for your password and moves the
 configuration aside instead of deleting it.
+
+`tests/pair-test` checks, with stand-ins for Lan Mouse, that only the machine
+chosen now stays trusted.
 
 `tests/clip-relay-test` exercises the relay with stand-ins for the clipboard
 and touches nothing on the machine. `tests/clip-smoke-test` uses the real
