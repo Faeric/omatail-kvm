@@ -32,23 +32,43 @@ omarchy plugin add https://github.com/Faeric/omakvm.git --enable
 The plugin is added under `~/.config/omarchy/plugins/io.github.faeric.omakvm`.
 It never modifies files under `/usr/share/omarchy`.
 
-Then, on each machine:
+## First setup
 
-1. Click the Omakvm icon in the bar.
-2. Choose the other machine in the list.
-3. Choose the edge of this screen its screen sits on, and press **Apply**.
-   On the second machine the edge is already filled in: it is the opposite of
-   the one chosen on the first.
-4. A terminal opens and asks for your password. It prints the three commands
-   it runs as root before asking:
+The whole setup takes about a minute per machine. Do the first machine, then
+the second; the order does not matter.
 
-   ```text
-   pacman -S --needed --noconfirm lan-mouse
-   ufw allow in on tailscale0 from <other machine> to any port 4242 proto udp
-   ufw allow in on tailscale0 from <other machine> to any port 4244 proto tcp
-   ```
+**1. Open the panel and choose the other machine.** Click the Omakvm icon in
+the bar. The list shows the machines of your tailnet that are online.
 
-Once both machines have done this they pair on their own and sharing starts.
+![The panel before a machine is chosen](docs/step-1-choose.png)
+
+**2. Say where its screen is, and press Apply.** Pick the edge of *this*
+screen the other screen sits on. On the second machine the edge is already
+filled in: it is the opposite of the one chosen on the first.
+
+![A machine and an edge chosen, with the Apply button](docs/step-2-apply.png)
+
+**3. Type your password in the terminal that opens.** It prints the three
+commands it runs as root before asking:
+
+```text
+pacman -S --needed --noconfirm lan-mouse
+ufw allow in on tailscale0 from <other machine> to any port 4242 proto udp
+ufw allow in on tailscale0 from <other machine> to any port 4244 proto tcp
+```
+
+On the first machine it says `Waiting for <other machine>: it has not chosen
+this machine as its peer yet.` before `Setup is complete.` That is expected:
+nothing more is needed there. Close the terminal and go to the second machine.
+
+**4. Do the same on the second machine.** When its terminal ends with
+`Setup is complete.`, the two machines have paired on their own and sharing
+is on. Every row of the panel is ticked on both:
+
+![The panel once both machines are set up](docs/step-3-sharing.png)
+
+If a row is not ticked, its line says what is missing; the download icon on
+the Installation row opens the password step again.
 
 ## Use
 
@@ -135,11 +155,15 @@ omarchy plugin remove io.github.faeric.omakvm
 To undo the rest:
 
 ```bash
-sudo ufw status numbered          # find the two "Omakvm" rules
-sudo ufw delete <number>          # once for each
+sudo ufw delete allow in on tailscale0 from <other machine> to any port 4242 proto udp
+sudo ufw delete allow in on tailscale0 from <other machine> to any port 4244 proto tcp
 sudo pacman -Rns lan-mouse
 rm -rf ~/.config/omakvm
 ```
+
+`omarchy plugin remove` keeps a hidden copy of the plugin next to where it
+was, `~/.config/omarchy/plugins/.io.github.faeric.omakvm.bak.<date>`; delete
+it if you do not want it.
 
 `~/.config/lan-mouse` holds this machine's Lan Mouse certificate and its
 configuration; remove it too if you are done with Lan Mouse, or restore
@@ -151,6 +175,10 @@ configuration; remove it too if you are done with Lan Mouse, or restore
 omarchy plugin validate .
 ./tests/check.sh
 ```
+
+`tests/fresh-start` puts a machine back to how it was before Omakvm, to
+rehearse a first install; it asks for your password and moves the
+configuration aside instead of deleting it.
 
 `tests/clip-relay-test` exercises the relay with stand-ins for the clipboard
 and touches nothing on the machine. `tests/clip-smoke-test` uses the real

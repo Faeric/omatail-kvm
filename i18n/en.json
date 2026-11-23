@@ -45,6 +45,8 @@
   "row.clipboard.pause": "Pause clipboard syncing",
   "row.clipboard.resume": "Resume clipboard syncing",
   "row.none": "Choose a machine first",
+  "row.needPosition": "Now choose where its screen is",
+  "row.needApply": "Press Apply to set it up",
   "toggle.on": "Start sharing",
   "toggle.off": "Stop sharing",
   "tooltip": "Omakvm: %1"

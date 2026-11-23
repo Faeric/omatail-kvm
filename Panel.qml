@@ -684,7 +684,9 @@ Panel {
             PlainText {
               width: parent.width
               visible: !root.configured
-              text: strings.t("row.none")
+              text: root.selectedAddress === "" ? strings.t("row.none")
+                : root.selectedPosition === "" ? strings.t("row.needPosition")
+                : strings.t("row.needApply")
               color: root.dim
               font.pixelSize: Style.font.bodySmall
             }

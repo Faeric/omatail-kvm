@@ -45,6 +45,8 @@
   "row.clipboard.pause": "Mettre la synchronisation en pause",
   "row.clipboard.resume": "Reprendre la synchronisation",
   "row.none": "Choisissez d'abord un poste",
+  "row.needPosition": "Indiquez maintenant où se trouve son écran",
+  "row.needApply": "Appuyez sur Appliquer pour tout mettre en place",
   "toggle.on": "Démarrer le partage",
   "toggle.off": "Arrêter le partage",
   "tooltip": "Omakvm : %1"
