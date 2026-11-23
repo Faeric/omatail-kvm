@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Put this machine back to how it was before Omakvm, to rehearse a first
+# install. Run it in a terminal: it asks for your password.
+#
+# Usage: fresh-start
+#
+# It follows the "Removal" section of the README, then goes one step further
+# and sets aside the Lan Mouse certificate, so pairing starts from nothing too.
+# Nothing is deleted: both configuration folders are moved to the backup
+# folder printed at the end.
+
+set -uo pipefail
+
+PLUGIN_ID="io.github.faeric.omakvm"
+PLUGIN_DIR="$HOME/.config/omarchy/plugins/$PLUGIN_ID"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omakvm"
+LAN_MOUSE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/lan-mouse"
+BACKUP_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omakvm-fresh-start/$(date +%Y%m%d-%H%M%S)"
+
+step() { printf '\n==> %s\n' "$*"; }
+
+mapfile -t peers < <(awk '$1 ~ /^100\.[0-9]+\.[0-9]+\.[0-9]+$/ { print $1 }' "$CONFIG_DIR/peers" 2>/dev/null)
+
+printf 'Omakvm fresh start\n==================\n\n'
+printf 'This removes the Omakvm plugin, its services, its firewall rules and the\n'
+printf 'lan-mouse package from this machine (%s).\n' "$(uname -n)"
+printf 'Configuration is moved to %s\n\n' "$BACKUP_DIR"
+read -r -p 'Continue? [y/N] ' answer
+[[ $answer == [yYoO]* ]] || { printf 'Nothing was changed.\n'; exit 0; }
+
+step 'Stopping sharing and removing the services (omakvm remove)'
+if [[ -x $PLUGIN_DIR/scripts/omakvm ]]; then
+  "$PLUGIN_DIR/scripts/omakvm" remove
+else
+  printf 'The plugin is not installed; skipping.\n'
+fi
+
+step 'Removing the plugin (omarchy plugin remove)'
+if [[ -d $PLUGIN_DIR ]]; then
+  omarchy plugin remove "$PLUGIN_ID" --yes
+else
+  printf 'The plugin is not installed; skipping.\n'
+fi
+
+step 'Removing the firewall rules and lan-mouse (needs your password)'
+if sudo -v; then
+  if command -v ufw >/dev/null 2>&1; then
+    for peer in "${peers[@]}"; do
+      sudo ufw delete allow in on tailscale0 from "$peer" to any port 4242 proto udp
+      sudo ufw delete allow in on tailscale0 from "$peer" to any port 4244 proto tcp
+    done
+    ((${#peers[@]})) || printf 'No peer is recorded, so no rule was looked for.\n'
+  fi
+  if pacman -Q lan-mouse >/dev/null 2>&1; then
+    sudo pacman -Rns --noconfirm lan-mouse
+  else
+    printf 'lan-mouse is not installed; skipping.\n'
+  fi
+else
+  printf 'No password given: the firewall rules and lan-mouse were left in place.\n' >&2
+fi
+
+step 'Setting the configuration aside'
+mkdir -p "$BACKUP_DIR"
+for dir in "$CONFIG_DIR" "$LAN_MOUSE_DIR"; do
+  [[ -e $dir ]] && mv -- "$dir" "$BACKUP_DIR/" && printf 'Moved %s\n' "$dir"
+done
+
+step 'What is left'
+left=0
+systemctl --user list-unit-files 'omakvm-*' --no-legend 2>/dev/null | grep . && left=1
+pgrep -a -u "$UID" -x lan-mouse && left=1
+pgrep -a -u "$UID" -f 'wl-paste .*--watch.*clip-send' && left=1
+pacman -Q lan-mouse 2>/dev/null && left=1
+[[ -e $PLUGIN_DIR ]] && printf '%s\n' "$PLUGIN_DIR" && left=1
+sudo -n ufw status 2>/dev/null | grep -i omakvm && left=1
+
+if ((left == 0)); then
+  printf 'Nothing. This machine is ready for a first install.\n'
+else
+  printf '\nThe lines above are leftovers. Note them before going on.\n'
+fi
+
+printf '\nPress Enter to close.'
+read -r _

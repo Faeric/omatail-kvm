@@ -314,6 +314,7 @@ Panel {
 
   function finishAction(name, exitCode, output) {
     root.busyAction = ""
+    var appliedAddress = root.selectedAddress
     if (name === "configure" && (exitCode === 0 || exitCode === 4)) {
       root.pendingAddress = ""
       root.pendingPosition = ""
@@ -321,7 +322,7 @@ Panel {
     }
     if (exitCode === 4 && name === "configure") {
       // The choice is saved, lan-mouse is not installed: go and install it.
-      root.peerAddress = root.selectedAddress
+      root.peerAddress = appliedAddress
       runSetup()
     } else if (exitCode !== 0 && !(name === "pair" && exitCode === 3)) {
       var lines = String(output || "").trim().split("\n")

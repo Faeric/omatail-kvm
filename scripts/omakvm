@@ -90,7 +90,7 @@ write_lan_mouse_config() {
     printf 'capture_backend = "layer-shell"\n\n'
     printf '[[clients]]\nips = ["%s"]\nposition = "%s"\nactivate_on_startup = true\n\n' "$address" "$position"
     printf '[authorized_fingerprints]\n'
-    [[ -n $kept ]] && printf '%s\n' "$kept"
+    if [[ -n $kept ]]; then printf '%s\n' "$kept"; fi
   } >"$tmp" && mv -f -- "$tmp" "$LAN_MOUSE_CONFIG" || {
     rm -f -- "$tmp"
     return 1
